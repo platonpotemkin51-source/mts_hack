@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+!.env.example
+.venv
+**/__pycache__
+**/node_modules
+frontend
+runtime
+data
+evaluation
+*.zip
+*.csv
+*.sqlite*
+*.db*

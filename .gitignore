@@ -1,0 +1,46 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Private organizer input: only the placement instructions may be tracked.
+data/*
+!data/README.md
+knowledge-base/
+knowledge-base.zip
+questions.csv
+demo_questions.csv
+demo_output.csv
+sample_submission.zip
+submission.csv
+submission*.zip
+
+# Generated indexes, sessions and local evaluation reports
+runtime/
+**/local/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite3-*
+*.db-*
+*.faiss
+*.npy
+*.npz
+
+# Python / Node / editors
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+node_modules/
+dist/
+coverage/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

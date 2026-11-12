@@ -1,0 +1,14 @@
+{
+  "session_id": "synthetic-demo-session",
+  "answer": "Какую задачу на складе нужно решить в первую очередь?",
+  "sources": [],
+  "brief": {
+    "object": "Склад",
+    "problem": null,
+    "known_parameters": [],
+    "recommended_products": [],
+    "missing_fields": ["Основная задача"]
+  },
+  "lead_offer": false,
+  "debug": {"retrieval_ms": 0.0, "generation_ms": 0.0, "total_ms": 0.0}
+}
