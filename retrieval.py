@@ -1,7 +1,7 @@
-"""Offline BM25 baseline with Russian normalization. Standard library only.
+"""BM25, organizer embeddings and RRF hybrid behind one retrieval contract.
 
 No network or indexing on import. A built retriever is read-only and may be
-shared between threads. This is lexical retrieval, not embeddings/hybrid.
+shared between threads. HTTPX is imported only when embeddings are requested.
 """
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ import math
 import os
 import re
 import tempfile
+import time
 import unicodedata
+from urllib.parse import urlsplit
 
 from contracts import KnowledgeChunk, Retriever
 from chunking import CHUNKER_VERSION, MAX_SECTION_CHARS, OVERLAP_CHARS, chunk_documents
@@ -32,6 +34,13 @@ _ALIASES = {
     "фото": "фотограф", "снимок": "фотограф", "снимк": "фотограф",
     "симк": "сим", "sim": "сим", "орэм": "оптов", "askue": "аскуэ",
 }
+
+
+def _validate_query(query: str, top_k: int) -> None:
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
+        raise ValueError("top_k must be a positive integer")
+    if not isinstance(query, str):
+        raise TypeError("query must be a string")
 
 
 def tokenize(text: str, *, expand: bool = True) -> list[str]:
@@ -86,10 +95,7 @@ class BM25Retriever:
                      for key, values in postings.items()}
 
     def retrieve(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
-        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
-            raise ValueError("top_k must be a positive integer")
-        if not isinstance(query, str):
-            raise TypeError("query must be a string")
+        _validate_query(query, top_k)
         scores: dict[int, float] = defaultdict(float)
         for token in sorted(set(tokenize(query, expand=self._expand))):
             for index, frequency in self._postings.get(token, ()):
@@ -106,6 +112,151 @@ class BM25Retriever:
                 if len(result) == top_k:
                     break
         return result
+
+
+class EmbeddingError(RuntimeError):
+    """Safe diagnostic without credentials, response body or document content."""
+
+
+def _env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value and value != name:
+            return value
+    return default
+
+
+def _normalize_vectors(value, count: int) -> tuple[tuple[float, ...], ...]:
+    if not isinstance(value, (list, tuple)) or len(value) != count or not count:
+        raise EmbeddingError("Embedding response has incorrect vector count")
+    vectors = []
+    dimension = None
+    for vector in value:
+        if (not isinstance(vector, (list, tuple)) or not 1 <= len(vector) <= 8192
+                or (dimension is not None and len(vector) != dimension)):
+            raise EmbeddingError("Embedding vectors have invalid dimensions")
+        if any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in vector):
+            raise EmbeddingError("Embedding vector contains non-finite or non-numeric values")
+        try:
+            vector = tuple(float(x) for x in vector)
+        except OverflowError:
+            raise EmbeddingError("Embedding vector value exceeds float range") from None
+        if not all(math.isfinite(x) for x in vector):
+            raise EmbeddingError("Embedding vector contains non-finite or non-numeric values")
+        norm = math.hypot(*vector)
+        if not math.isfinite(norm) or norm == 0:
+            raise EmbeddingError("Embedding vector has invalid norm")
+        dimension = len(vector)
+        vectors.append(tuple(x / norm for x in vector))
+    return tuple(vectors)
+
+
+class OrganizerEmbedder:
+    """POST /embeddings, as in the organizer's sample_submission.zip.
+
+    Each call owns its HTTP client, so calls can run in different threads.
+    No network in construction; at most two attempts per batch, timeout 30s.
+    """
+
+    def __init__(self):
+        self.base_url = _env("LLM_BASE_URL", "OPENAI_BASE_URL", "BASE_URL").rstrip("/")
+        self.model = _env("EMB_MODEL", default="baai/bge-m3")
+        self._key = _env("EMBEDDER_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY")
+        try:
+            url = urlsplit(self.base_url)
+            valid = (url.scheme in {"http", "https"} and url.hostname and url.port != 0
+                     and not url.username and not url.password and not url.query and not url.fragment)
+        except ValueError:
+            valid = False
+        if not valid or not self._key:
+            raise EmbeddingError("Set proxy BASE_URL and API_KEY via LLM_* or OPENAI_* environment variables")
+
+    def embed(self, texts: list[str]) -> tuple[tuple[float, ...], ...]:
+        if not texts or any(not isinstance(text, str) or not text.strip() for text in texts):
+            raise ValueError("Embedding inputs must be nonempty strings")
+        import httpx
+
+        vectors = []
+        with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+            for start in range(0, len(texts), 16):
+                batch = texts[start:start + 16]
+                for attempt in range(2):
+                    try:
+                        response = client.post(
+                            self.base_url + "/embeddings",
+                            headers={"Authorization": "Bearer " + self._key},
+                            json={"model": self.model, "input": batch},
+                        )
+                    except httpx.TransportError:
+                        if attempt == 0:
+                            time.sleep(0.5)
+                            continue
+                        raise EmbeddingError("Embedding proxy transport failure after 2 attempts") from None
+                    status = response.status_code
+                    if status == 200:
+                        break
+                    if (status == 429 or 500 <= status < 600) and attempt == 0:
+                        time.sleep(0.5)
+                        continue
+                    raise EmbeddingError(f"Embedding proxy HTTP {status}; no lexical fallback")
+                try:
+                    items = response.json()["data"]
+                    if not isinstance(items, list) or len(items) != len(batch):
+                        raise ValueError("count")
+                    ordered = [None] * len(batch)
+                    for ordinal, item in enumerate(items):
+                        index = item.get("index", ordinal)
+                        if (isinstance(index, bool) or not isinstance(index, int)
+                                or not 0 <= index < len(batch) or ordered[index] is not None):
+                            raise ValueError("index")
+                        ordered[index] = item["embedding"]
+                    vectors.extend(_normalize_vectors(ordered, len(batch)))
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    raise EmbeddingError("Malformed embedding response: expected data[index, embedding]") from None
+        # Validate cross-batch dimensions too.
+        return _normalize_vectors(vectors, len(texts))
+
+
+class EmbeddingRetriever:
+    def __init__(self, chunks: list[KnowledgeChunk], embedder: OrganizerEmbedder, vectors):
+        self._chunks = tuple(chunks)
+        self._embedder = embedder
+        self._vectors = _normalize_vectors(vectors, len(chunks))
+
+    def retrieve(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
+        _validate_query(query, top_k)
+        if not tokenize(query):
+            return []
+        vector = self._embedder.embed([query])[0]
+        if len(vector) != len(self._vectors[0]):
+            raise EmbeddingError("Query embedding dimension differs from document index; rebuild/check model")
+        scores = [sum(a * b for a, b in zip(vector, doc)) for doc in self._vectors]
+        ranked = sorted(range(len(scores)), key=lambda i: (-scores[i], self._chunks[i].chunk_id))
+        return [replace(self._chunks[i], score=scores[i]) for i in ranked[:top_k]]
+
+
+class HybridRetriever:
+    """Equal-weight reciprocal rank fusion; never add BM25 and cosine scores."""
+
+    def __init__(self, lexical: Retriever, semantic: Retriever):
+        self._lexical = lexical
+        self._semantic = semantic
+
+    def retrieve(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
+        _validate_query(query, top_k)
+        if not tokenize(query):
+            return []
+        scores: dict[str, float] = defaultdict(float)
+        chunks = {}
+        for retriever in (self._lexical, self._semantic):
+            seen = set()
+            for rank, chunk in enumerate(retriever.retrieve(query, max(20, top_k)), 1):
+                if chunk.chunk_id not in seen:
+                    seen.add(chunk.chunk_id)
+                    chunks[chunk.chunk_id] = chunk
+                    scores[chunk.chunk_id] += 1.0 / (60 + rank)
+        ranked = sorted(chunks, key=lambda key: (-scores[key], key))
+        return [replace(chunks[key], score=scores[key]) for key in ranked[:top_k]]
 
 
 def _cache_key(documents) -> str:
@@ -136,15 +287,14 @@ def _read_cache(path: Path, key: str) -> list[KnowledgeChunk] | None:
         return None
 
 
-def _write_cache(path: Path, key: str, chunks: list[KnowledgeChunk]) -> None:
+def _write_cache(path: Path, payload: dict) -> None:
     temporary: str | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
                                          prefix=".rag-", suffix=".tmp", delete=False) as stream:
             temporary = stream.name
-            json.dump({"key": key, "version": INDEX_VERSION,
-                       "chunks": [asdict(c) for c in chunks]}, stream, ensure_ascii=False)
+            json.dump(payload, stream, ensure_ascii=False, allow_nan=False)
         os.replace(temporary, path)
     except OSError:
         _LOG.warning("Cannot write RAG cache; using in-memory index")
@@ -156,13 +306,41 @@ def _write_cache(path: Path, key: str, chunks: list[KnowledgeChunk]) -> None:
                 _LOG.warning("Cannot remove temporary RAG cache")
 
 
-def build_retriever(kb_path: Path, cache_dir: Path | None = None) -> Retriever:
-    """Read the full KB and build BM25 once; reuse the returned object.
+def _embedding_retriever(chunks: list[KnowledgeChunk], cache_dir: Path | None) -> EmbeddingRetriever:
+    embedder = OrganizerEmbedder()
+    key = hashlib.sha256(json.dumps([
+        "dense-v1", embedder.base_url, embedder.model, [c.chunk_id for c in chunks],
+    ]).encode()).hexdigest()
+    path = Path(cache_dir) / f"embeddings-{key}.json" if cache_dir is not None else None
+    vectors = None
+    if path is not None:
+        try:
+            if path.stat().st_size > 128 * 1024 * 1024:
+                raise ValueError("size")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload["key"] == key:
+                vectors = _normalize_vectors(payload["vectors"], len(chunks))
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError, EmbeddingError):
+            _LOG.warning("Ignoring unreadable embedding cache; rebuilding via proxy")
+    if vectors is None:
+        vectors = embedder.embed([c.text for c in chunks])
+        if path is not None:
+            _write_cache(path, {"key": key, "vectors": vectors})
+    return EmbeddingRetriever(chunks, embedder, vectors)
 
-    Optional JSON cache stores chunks (private data), keyed by all document
-    hashes and algorithm configuration. Postings are rebuilt in memory; no
-    pickle or network. Use an ignored runtime directory for the cache.
+
+def build_retriever(kb_path: Path, cache_dir: Path | None = None) -> Retriever:
+    """Build once; RETRIEVAL_MODE=bm25 (default), embeddings or hybrid.
+
+    BM25 needs no network/dependencies. Other modes use organizer HTTP embeddings,
+    cache document vectors and embed each query. Errors never silently switch mode.
+    Use an ignored runtime directory for caches containing private KB material.
     """
+    mode = _env("RETRIEVAL_MODE", default="bm25").lower()
+    if mode not in {"bm25", "embeddings", "hybrid"}:
+        raise ValueError("RETRIEVAL_MODE must be bm25, embeddings or hybrid")
     documents = load_documents(Path(kb_path))
     key = _cache_key(documents)
     path = Path(cache_dir) / f"bm25-{key}.json" if cache_dir is not None else None
@@ -170,5 +348,9 @@ def build_retriever(kb_path: Path, cache_dir: Path | None = None) -> Retriever:
     if chunks is None:
         chunks = chunk_documents(documents)
         if path is not None:
-            _write_cache(path, key, chunks)
-    return BM25Retriever(chunks)
+            _write_cache(path, {"key": key, "version": INDEX_VERSION,
+                                "chunks": [asdict(c) for c in chunks]})
+    if mode == "bm25":
+        return BM25Retriever(chunks)
+    semantic = _embedding_retriever(chunks, cache_dir)
+    return semantic if mode == "embeddings" else HybridRetriever(BM25Retriever(chunks), semantic)

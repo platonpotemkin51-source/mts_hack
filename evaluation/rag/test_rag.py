@@ -3,6 +3,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import math
+import os
 import shutil
 import stat
 import subprocess
@@ -30,6 +31,9 @@ def document(text, source="invented.md"):
 
 class RAGTests(unittest.TestCase):
     def setUp(self):
+        mode = patch.dict(os.environ, {"RETRIEVAL_MODE": "bm25"})
+        mode.start()
+        self.addCleanup(mode.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)

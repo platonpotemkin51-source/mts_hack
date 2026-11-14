@@ -4,6 +4,7 @@ import argparse
 from collections import Counter
 import json
 import math
+import os
 from pathlib import Path
 import statistics
 import sys
@@ -29,9 +30,12 @@ def matches(chunk, target):
 def evaluate(retriever, cases, repeats=30):
     details = []
     times = []
+    first_times = []
     for case in cases:
+        start = time.perf_counter()
         results = retriever.retrieve(case["query"], top_k=6)
-        targets = case["targets"]
+        first_times.append((time.perf_counter() - start) * 1000)
+        targets = case.get("targets", [])
         ranks = [next((rank for rank, chunk in enumerate(results, 1)
                        if matches(chunk, target)), None) for target in targets]
         found = [rank for rank in ranks if rank is not None]
@@ -42,15 +46,19 @@ def evaluate(retriever, cases, repeats=30):
                         "all_targets_at_6": bool(targets) and len(found) == len(targets),
                         "reciprocal_rank": 1 / min(found) if found else 0,
                         "results": [{"source": c.source, "title": c.title,
-                                     "chunk_id": c.chunk_id, "score": c.score} for c in results]})
+                                     "chunk_id": c.chunk_id, "score": c.score,
+                                     "text": c.text} for c in results]})
     for _ in range(repeats):
         for case in cases:
             start = time.perf_counter()
             retriever.retrieve(case["query"], top_k=6)
             times.append((time.perf_counter() - start) * 1000)
-    summary = {name: round(statistics.mean(row[name] for row in details), 4)
+    if repeats == 0:
+        times = first_times
+    labeled = [row for row in details if row["ranks"]]
+    summary = {name: round(statistics.mean(row[name] for row in labeled), 4) if labeled else None
                for name in ("hit_at_1", "hit_at_3", "hit_at_6", "all_targets_at_6", "reciprocal_rank")}
-    summary.update({"cases": len(cases), "search_samples": len(times),
+    summary.update({"cases": len(cases), "labeled_cases": len(labeled), "search_samples": len(times),
                     "median_ms": round(statistics.median(times), 3),
                     "p95_ms": round(sorted(times)[math.ceil(len(times) * 0.95) - 1], 3)})
     return {"summary": summary, "details": details}
@@ -61,6 +69,8 @@ def main():
     parser.add_argument("--kb", type=Path, default=ROOT / "data/knowledge-base.zip")
     parser.add_argument("--cases", type=Path, required=True, help="Local annotated JSON cases")
     args = parser.parse_args()
+    if os.getenv("RETRIEVAL_MODE", "bm25").strip().lower() not in {"", "bm25"}:
+        parser.error("This is the offline BM25 benchmark; use compare.py for network modes")
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
     if not isinstance(cases, list) or not cases or any(not c.get("targets") for c in cases):
         parser.error("Expected a nonempty list of cases with query and targets")
