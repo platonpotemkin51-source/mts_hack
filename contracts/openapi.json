@@ -3,7 +3,7 @@
   "info": {
     "title": "Energytool Consultant — target API",
     "version": "1.0.0",
-    "description": "Team integration contract. Only GET /api/health is implemented in the scaffold. See docs/CONTRACTS.md."
+    "description": "Implemented web API. See docs/CONTRACTS.md."
   },
   "servers": [
     {
@@ -14,7 +14,7 @@
     "/api/health": {
       "get": {
         "operationId": "health",
-        "summary": "Implemented service health",
+        "summary": "Service health and chat readiness",
         "responses": {
           "200": {
             "description": "Server state",
@@ -29,10 +29,28 @@
         }
       }
     },
+    "/api/ready": {
+      "get": {
+        "operationId": "readiness",
+        "summary": "200 when knowledge base and model settings are available; otherwise 503",
+        "responses": {
+          "200": {"description": "Ready", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HealthResponse"}}}},
+          "503": {"description": "Not ready", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HealthResponse"}}}}
+        }
+      }
+    },
+    "/api/requests/{request_id}/close": {
+      "post": {
+        "operationId": "cancelChatRequest",
+        "summary": "Close the session associated with a pending or completed client request",
+        "parameters": [{"name": "request_id", "in": "path", "required": true, "schema": {"type": "string"}}],
+        "responses": {"204": {"description": "Cancelled"}}
+      }
+    },
     "/api/sessions": {
       "post": {
         "operationId": "createSession",
-        "summary": "Planned: create an empty session",
+        "summary": "Create an empty session",
         "responses": {
           "201": {
             "description": "Created",
@@ -48,7 +66,7 @@
       },
       "get": {
         "operationId": "listSessions",
-        "summary": "Planned: archive, including sessions without leads",
+        "summary": "Archive, including sessions without leads",
         "responses": {
           "200": {
             "description": "All sessions",
@@ -69,7 +87,7 @@
     "/api/chat": {
       "post": {
         "operationId": "chat",
-        "summary": "Planned: consult within one session",
+        "summary": "Consult within one session; request_id makes retries idempotent",
         "requestBody": {
           "required": true,
           "content": {
@@ -148,7 +166,7 @@
       ],
       "get": {
         "operationId": "getSession",
-        "summary": "Planned: read archived history without resuming it",
+        "summary": "Read archived history without resuming it",
         "responses": {
           "200": {
             "description": "History",
@@ -187,7 +205,7 @@
       ],
       "post": {
         "operationId": "closeSession",
-        "summary": "Planned: idempotently close without deleting history",
+        "summary": "Idempotently close without deleting history",
         "responses": {
           "200": {
             "description": "Closed",
@@ -215,7 +233,7 @@
     "/api/leads": {
       "post": {
         "operationId": "createLead",
-        "summary": "Planned: save an internal lead with explicit consent",
+        "summary": "Save an internal lead with explicit consent",
         "requestBody": {
           "required": true,
           "content": {
@@ -290,9 +308,8 @@
           "status": {
             "type": "string",
             "enum": [
-              "scaffold",
-              "ok",
-              "degraded"
+              "ready",
+              "not_ready"
             ]
           },
           "chat_ready": {
@@ -415,6 +432,12 @@
           "message": {
             "type": "string",
             "minLength": 1
+          },
+          "request_id": {
+            "type": ["string", "null"],
+            "minLength": 8,
+            "maxLength": 100,
+            "description": "Client-generated ID for safe retry and lost-request cancellation"
           },
           "debug": {
             "type": "boolean",
