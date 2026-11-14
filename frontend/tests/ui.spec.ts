@@ -189,6 +189,7 @@ test("new dialogue during generation discards old answer and closes old ID", asy
   await expect(page.getByText("Консультант готовит ответ…")).toBeVisible();
   await page.getByRole("button", { name: "Новый диалог" }).click();
   await expect.poll(() => closed.length).toBe(1);
+  expect(closed[0]).toMatch(/^\/api\/requests\/.+\/close$/);
   await expect(page.getByText("Ответ 1:", { exact: false })).toHaveCount(0);
   await expect(
     page.getByLabel("Карточка клиента").getByText("Пока не указан"),
@@ -246,6 +247,27 @@ test("offline error is not a synthetic answer", async ({ page }) => {
     "Не удалось получить ответ сервера",
   );
   await expect(page.getByLabel("Отправить сообщение")).toBeDisabled();
+});
+
+test("uncertain request retries with the same ID and no duplicate message", async ({ page }) => {
+  const calls: Array<{ request_id: string; message: string }> = [];
+  await page.route("**/api/chat", (route) => {
+    const body = route.request().postDataJSON();
+    calls.push(body);
+    if (calls.length === 1) {
+      return route.fulfill({ status: 503, json: { error: { code: "model_unavailable", message: "internal" } } });
+    }
+    return route.fulfill({ json: { ...fixture, session_id: "recovered-session", answer: "Восстановленный ответ", brief: blank, lead_offer: false, sources: [], debug: null } });
+  });
+  await page.goto("/");
+  await send(page);
+  await expect(page.getByRole("button", { name: "Проверить ответ повторно" })).toBeVisible();
+  await page.getByRole("button", { name: "Проверить ответ повторно" }).click();
+  await expect(page.getByText("Восстановленный ответ")).toBeVisible();
+  expect(calls).toHaveLength(2);
+  expect(calls[0].request_id).toBe(calls[1].request_id);
+  expect(calls[0].message).toBe(calls[1].message);
+  await expect(page.getByText("Нужен учёт на складе", { exact: true })).toHaveCount(1);
 });
 
 test("mobile layout, long text and keyboard focus", async ({ page }) => {

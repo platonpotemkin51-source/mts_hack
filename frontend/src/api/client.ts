@@ -10,6 +10,7 @@ import { RequestError } from "./errors";
 
 export interface Api {
   chat(body: ChatRequest, signal?: AbortSignal): Promise<ChatResponse>;
+  cancelRequest(id: string): Promise<void>;
   close(id: string): Promise<SessionSummary>;
   sessions(signal?: AbortSignal): Promise<SessionSummary[]>;
   session(id: string, signal?: AbortSignal): Promise<SessionDetail>;
@@ -19,6 +20,10 @@ export interface Api {
 // Never surface arbitrary server exception text, URLs, or response bodies.
 export function friendlyError(error: unknown): string {
   const status = error instanceof RequestError ? error.status : 0;
+  if (error instanceof RequestError && error.code === "request_pending")
+    return "Ответ ещё формируется. Повторите проверку через несколько секунд.";
+  if (error instanceof RequestError && error.code === "request_stale")
+    return "В диалоге уже есть новые сообщения. Проверьте архив и начните новый диалог.";
   return (
     (
       {
@@ -57,7 +62,17 @@ export function createHttpApi(
         signal: timeout.signal,
         keepalive,
       });
-      if (!response.ok) throw new RequestError(response.status);
+      if (!response.ok) {
+        let code: string | undefined;
+        try {
+          const body = (await response.json()) as { error?: { code?: string } };
+          code = body.error?.code;
+        } catch {
+          /* Keep only the HTTP status. Never show arbitrary server text. */
+        }
+        throw new RequestError(response.status, code);
+      }
+      if (response.status === 204) return undefined as T;
       return (await response.json()) as T;
     } finally {
       clearTimeout(timer);
@@ -66,6 +81,8 @@ export function createHttpApi(
   }
   return {
     chat: (body, signal) => request("/chat", body, signal),
+    cancelRequest: (id) =>
+      request(`/requests/${encodeURIComponent(id)}/close`, {}, undefined, true),
     close: (id) =>
       request(`/sessions/${encodeURIComponent(id)}/close`, {}, undefined, true),
     sessions: (signal) => request("/sessions", undefined, signal),

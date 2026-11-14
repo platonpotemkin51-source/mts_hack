@@ -1,5 +1,6 @@
-"""Package the flat source scaffold, NOT a ready competition solution."""
+"""Package only the flat competition runner and its required dependency."""
 
+import ast
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -20,13 +21,25 @@ def main() -> None:
     for name in FILES:
         if not (ROOT / name).is_file():
             raise SystemExit(f"Missing required source file: {name}")
-    output = ROOT / "runtime" / "submission-scaffold.zip"
+        if name.endswith(".py"):
+            ast.parse((ROOT / name).read_text(encoding="utf-8"), filename=name)
+    if "httpx==0.28.1" not in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+        raise SystemExit("Expected pinned httpx dependency is missing")
+    output = ROOT / "runtime" / "submission.zip"
     output.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
         for name in FILES:
-            archive.write(ROOT / name, arcname=name)
-    print(f"Created source scaffold: {output}")
-    print("NOT READY FOR EVALUATION: solution.py has not been implemented.")
+            if name == "requirements.txt":
+                archive.writestr(name, "httpx==0.28.1\n")
+            else:
+                archive.write(ROOT / name, arcname=name)
+    if output.stat().st_size > 128 * 1024 * 1024:
+        output.unlink()
+        raise SystemExit("Submission ZIP exceeds the 128 MiB limit")
+    with ZipFile(output) as archive:
+        if archive.testzip() is not None or set(archive.namelist()) != set(FILES):
+            raise SystemExit("Submission ZIP verification failed")
+    print(f"Created verified flat submission ZIP: {output}")
 
 
 if __name__ == "__main__":

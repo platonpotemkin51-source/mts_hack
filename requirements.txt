@@ -1,9 +1,7 @@
 # Versions from the organizer's allowlist, verified 2026-11-12.
-# Platon owns shared dependencies; reduce the submission subset if appropriate.
+# Runtime and local comparison dependencies. Submission ZIP uses only httpx.
 fastapi==0.143.2
 uvicorn==0.54.0
 pydantic==2.14.2
 python-dotenv==1.1.1
 httpx==0.28.1
-numpy==2.2.6
-rank-bm25==0.2.2

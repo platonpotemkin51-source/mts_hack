@@ -97,10 +97,27 @@ def _search_query(message: str, history: list[ChatMessage], brief: ClientBrief) 
 
 def _out_of_scope(message: str) -> bool:
     return bool(re.search(
-        r"(как\s+(?:настроить|прошить|подключить|смонтировать|перепрограммировать)\s+"
+        r"(как\s+(?:настроить|прошить|подключить|смонтировать|установить|перепрограммировать)\s+"
         r"(?:сч[её]тчик|прибор|контроллер|систему)|схем[ау]\s+подключения|"
-        r"пошагов[а-я]*\s+инструкц[а-я]*\s+по\s+настройке)", message, re.I
+        r"пошагов[а-я]*\s+инструкц[а-я]*\s+по\s+настройке|"
+        r"техническ[а-я]*\s+документац[а-я]*)", message, re.I
     ))
+
+
+def _declined_contacts(history: list[ChatMessage], message: str) -> bool:
+    """A refusal remains effective for this session, regardless of word order."""
+    for item in [*history, ChatMessage("user", message)]:
+        if item.role != "user":
+            continue
+        content = item.content.lower()
+        if re.search(r"\bбез\s+(?:личных\s+)?контакт", content):
+            return True
+        if re.search(r"\b(?:телефон|номер|контакт)[а-я]*\b", content) and re.search(
+            r"\b(?:не\s+хочу|не\s+буду|не\s+готов|не\s+оставлю|пока\s+не|"
+            r"не\s+нужно|отказываюсь)\b", content
+        ):
+            return True
+    return False
 
 
 class Consultant:
@@ -156,9 +173,7 @@ class Consultant:
             answer = "В предоставленной базе не нашлось достаточных сведений для точного ответа. Уточните вашу задачу или обратитесь к специалисту Energytool."
         else:
             answer = parsed["answer"].strip()
-        declined = any(re.search(r"(?:не хочу|не буду|пока не|без)\s+(?:оставлять\s+)?(?:телефон|контакт)",
-                                 item.content, re.I)
-                       for item in [*history[-4:], ChatMessage("user", message)])
+        declined = _declined_contacts(history, message)
         user_turns = sum(item.role == "user" for item in history) + 1
         lead_offer = bool(parsed["lead_offer"] and user_turns >= 2 and not declined)
         return ConsultationResult(

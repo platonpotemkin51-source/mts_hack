@@ -75,6 +75,9 @@ class Store:
                     summary TEXT NOT NULL, created_at TEXT NOT NULL
                 );
             """)
+            # A process cannot resume an HTTP request interrupted by a restart.
+            # Keep its user message and allow an idempotent retry with the same ID.
+            db.execute("UPDATE chat_requests SET state='failed' WHERE state='pending'")
 
     def expire_idle(self, minutes: int = 60) -> None:
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
@@ -110,6 +113,16 @@ class Store:
                 if existing["state"] == "pending":
                     raise StoreError("request_pending", 409, "Ответ ещё формируется.")
                 session_id = existing["session_id"]
+                if db.execute("SELECT 1 FROM chat_requests WHERE session_id=? AND state='pending' LIMIT 1",
+                              (session_id,)).fetchone():
+                    raise StoreError("request_pending", 409, "Ответ ещё формируется.")
+                current_message = db.execute(
+                    "SELECT MAX(id) FROM messages WHERE session_id=? AND request_id=?",
+                    (session_id, request_id)).fetchone()[0]
+                latest_message = db.execute(
+                    "SELECT MAX(id) FROM messages WHERE session_id=?", (session_id,)).fetchone()[0]
+                if current_message != latest_message:
+                    raise StoreError("request_stale", 409, "В диалоге уже есть новые сообщения.")
                 db.execute("UPDATE chat_requests SET state='pending' WHERE request_id=?", (request_id,))
             else:
                 if session_id is None:
@@ -117,6 +130,9 @@ class Store:
                 current = self._session(db, session_id)
                 if current["status"] != "active":
                     raise StoreError("session_closed", 409, "Начните новый диалог.")
+                if db.execute("SELECT 1 FROM chat_requests WHERE session_id=? AND state='pending' LIMIT 1",
+                              (session_id,)).fetchone():
+                    raise StoreError("request_pending", 409, "Ответ ещё формируется.")
                 db.execute("INSERT INTO chat_requests(request_id,session_id,body_hash,state,created_at) "
                            "VALUES (?,?,?,?,?)", (request_id, session_id, digest, "pending", now()))
                 db.execute("INSERT INTO messages(session_id,request_id,role,content,created_at) "

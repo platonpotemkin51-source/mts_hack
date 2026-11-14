@@ -39,6 +39,9 @@ export function createMockApi(): Api {
     return s;
   };
   return {
+    async cancelRequest() {
+      // Synthetic responses have no server-side pending request to cancel.
+    },
     async chat(body, signal) {
       await new Promise<void>((resolve, reject) => {
         if (signal?.aborted) {

@@ -1,6 +1,6 @@
 # Backend — Платон
 
-Сейчас `app/main.py` предоставляет только `GET /api/health`. Чат и остальные маршруты описаны в `../contracts/openapi.json`, но ещё не реализованы.
+`app/main.py` реализует health/readiness, чат, сессии, архив и заявки. `app/storage.py` хранит их в SQLite, включая диалоги без заявки. Чат использует общий `consultant.py` и существующий `build_retriever`; модель берётся из переменных окружения. Контракт описан в `../contracts/openapi.json`.
 
 Запуск из корня: `python -m uvicorn backend.app.main:app --reload --port 8000`.
 

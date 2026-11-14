@@ -1,12 +1,21 @@
-# Initial scaffold: backend health only. Platon adds Daniil's UI at integration.
 services:
   backend:
     build:
       context: .
       dockerfile: Dockerfile
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data:ro
       - ./runtime:/app/runtime
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - backend
+    ports:
+      - "${UI_PORT:-5173}:80"

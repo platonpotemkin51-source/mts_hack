@@ -1,6 +1,8 @@
 import { ref } from "vue";
 import { api, friendlyError } from "../api/client";
+import { RequestError } from "../api/errors";
 import type {
+  ChatRequest,
   ChatResponse,
   ClientBrief,
   LeadRequest,
@@ -35,8 +37,10 @@ export function useConversation() {
     leadError = ref("");
   // An ambiguous network failure must not automatically replay a possibly saved message.
   const uncertain = ref(false);
+  const retryable = ref(false);
   let generation = 0;
   let leadController: AbortController | undefined;
+  let pending: ChatRequest | undefined;
 
   const close = (id: string) => {
     void api.close(id).catch(() => {
@@ -46,6 +50,12 @@ export function useConversation() {
   function reset() {
     generation++;
     leadController?.abort();
+    if (pending?.request_id) {
+      void api.cancelRequest(pending.request_id).catch(() => {
+        /* Idle server sessions are closed by the expiry policy. */
+      });
+    }
+    pending = undefined;
     if (sessionId.value) close(sessionId.value);
     sessionId.value = null;
     messages.value = [];
@@ -59,26 +69,22 @@ export function useConversation() {
     leadBusy.value = false;
     leadError.value = "";
     uncertain.value = false;
+    retryable.value = false;
   }
-  async function send() {
-    const message = draft.value.trim();
-    if (!message || busy.value || leadBusy.value || uncertain.value) return;
+  async function dispatch(body: ChatRequest) {
     const token = generation;
     busy.value = true;
     error.value = "";
-    draft.value = "";
-    messages.value.push({ role: "user", content: message });
+    uncertain.value = false;
+    retryable.value = false;
     try {
       // Keep receiving an old first response so its newly assigned ID can be closed.
-      const result = await api.chat({
-        session_id: sessionId.value,
-        message,
-        debug: debug.value,
-      });
+      const result = await api.chat(body);
       if (token !== generation) {
         close(result.session_id);
         return;
       }
+      pending = undefined;
       sessionId.value = result.session_id;
       messages.value.push({
         role: "assistant",
@@ -91,10 +97,25 @@ export function useConversation() {
       if (token === generation) {
         error.value = friendlyError(cause);
         uncertain.value = true;
+        retryable.value = !(cause instanceof RequestError) ||
+          cause.status === 503 || cause.code === "request_pending";
       }
     } finally {
       if (token === generation) busy.value = false;
     }
+  }
+  async function send() {
+    const message = draft.value.trim();
+    if (!message || busy.value || leadBusy.value || uncertain.value) return;
+    pending = { session_id: sessionId.value, message, debug: debug.value,
+      request_id: crypto.randomUUID() };
+    draft.value = "";
+    messages.value.push({ role: "user", content: message });
+    await dispatch(pending);
+  }
+  async function retry() {
+    if (!uncertain.value || !retryable.value || busy.value || !pending) return;
+    await dispatch(pending);
   }
   async function submitLead(fields: Omit<LeadRequest, "session_id">) {
     if (
@@ -138,8 +159,10 @@ export function useConversation() {
     leadBusy,
     leadError,
     uncertain,
+    retryable,
     reset,
     send,
+    retry,
     submitLead,
   };
 }

@@ -25,6 +25,7 @@ export interface ChatRequest {
   session_id: string | null;
   message: string;
   debug?: boolean;
+  request_id?: string;
 }
 
 export interface ChatResponse {

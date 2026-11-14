@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -73,6 +74,26 @@ class CoreTests(unittest.TestCase):
         result = Consultant(FakeRetriever(), forbidden).respond(
             message="Как настроить счетчик?", history=[], brief=ClientBrief())
         self.assertIn("не даю инструкции", result.answer)
+        documentation = Consultant(FakeRetriever(), forbidden).respond(
+            message="Покажи техническую документацию по прибору", history=[], brief=ClientBrief())
+        self.assertIn("не даю инструкции", documentation.answer)
+
+    def test_contact_refusal_is_durable_and_does_not_end_consultation(self):
+        consultant = Consultant(FakeRetriever(), fake_model)
+        history = [ChatMessage("user", "Расскажите про вымышленный макет"),
+                   ChatMessage("assistant", "Что уточнить?")]
+        declined = consultant.respond(
+            message="Телефон пока оставлять не хочу. Продолжим консультацию.",
+            history=history, brief=ClientBrief())
+        self.assertFalse(declined.lead_offer)
+        self.assertTrue(declined.answer)
+        later = consultant.respond(
+            message="А как его хранить?",
+            history=history + [ChatMessage("user", "Телефон пока оставлять не хочу."),
+                               ChatMessage("assistant", declined.answer)] +
+                    [ChatMessage("user", "Ещё вопрос"), ChatMessage("assistant", "Ответ")]*3,
+            brief=declined.brief)
+        self.assertFalse(later.lead_offer)
 
     def test_dialogue_case_uses_last_user_turn(self):
         seen = []
@@ -104,6 +125,9 @@ class CoreTests(unittest.TestCase):
                 generate([], transport=httpx.MockTransport(lambda _r: httpx.Response(401, text="secret")),
                          sleep=lambda _: None)
             self.assertNotIn("secret", str(raised.exception))
+            with self.assertRaises(ModelUnavailable):
+                generate([], transport=httpx.MockTransport(handler),
+                         deadline=time.monotonic() - 1, sleep=lambda _: None)
 
 
 class ApiTests(unittest.TestCase):
@@ -178,6 +202,56 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             detail = client.get("/api/sessions/" + response.json()["session_id"]).json()
             self.assertEqual([m["role"] for m in detail["messages"]], ["user", "assistant"])
+
+    def test_second_request_cannot_overtake_first_pending_reply(self):
+        entered, release = threading.Event(), threading.Event()
+        def slow(messages):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test timed out")
+            return fake_model(messages)
+        with TestClient(create_app(retriever=FakeRetriever(), generate_fn=slow,
+                                   db_path=Path(self.temp.name) / "parallel.sqlite3")) as client:
+            result = []
+            thread = threading.Thread(target=lambda: result.append(client.post(
+                "/api/chat", json={"session_id": None, "message": "Для склада нужен макет",
+                                   "request_id": "parallel-first"})))
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                sid = client.get("/api/sessions").json()[0]["session_id"]
+                overtaking = client.post("/api/chat", json={"session_id": sid,
+                    "message": "Уточню: это офис", "request_id": "parallel-second"})
+                self.assertEqual(overtaking.status_code, 409)
+                self.assertEqual(overtaking.json()["error"]["code"], "request_pending")
+            finally:
+                release.set()
+                thread.join(5)
+            self.assertEqual(result[0].status_code, 200)
+            detail = client.get("/api/sessions/" + sid).json()
+            self.assertEqual([item["role"] for item in detail["messages"]], ["user", "assistant"])
+            self.assertEqual(detail["brief"]["object"], "склад")
+
+    def test_failed_old_request_cannot_overwrite_newer_brief(self):
+        calls = []
+        def fail_old_once(messages):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ModelUnavailable("synthetic failure")
+            return fake_model(messages)
+        with TestClient(create_app(retriever=FakeRetriever(), generate_fn=fail_old_once,
+                                   db_path=Path(self.temp.name) / "stale.sqlite3")) as client:
+            old = {"session_id": None, "message": "Для склада нужен макет",
+                   "request_id": "stale-old"}
+            self.assertEqual(client.post("/api/chat", json=old).status_code, 503)
+            sid = client.get("/api/sessions").json()[0]["session_id"]
+            newer = client.post("/api/chat", json={"session_id": sid,
+                "message": "Уточню: это офис", "request_id": "stale-new"})
+            self.assertEqual(newer.status_code, 200)
+            stale = client.post("/api/chat", json=old)
+            self.assertEqual(stale.status_code, 409)
+            self.assertEqual(stale.json()["error"]["code"], "request_stale")
+            self.assertEqual(client.get("/api/sessions/" + sid).json()["brief"]["object"], "офис")
 
 
 if __name__ == "__main__":

@@ -20,8 +20,10 @@ const {
   leadBusy,
   leadError,
   uncertain,
+  retryable,
   reset,
   send,
+  retry,
   submitLead,
 } = useConversation();
 const page = ref<"chat" | "archive">("chat"),
@@ -230,10 +232,16 @@ onUnmounted(() => {
                 </div>
                 <div v-if="error" class="error" role="alert">
                   <p>{{ error }}</p>
-                  <p>
-                    Статус сохранения сообщения неизвестен. Проверьте архив и
-                    начните новый диалог, чтобы избежать повторной отправки.
+                  <p v-if="retryable">
+                    Можно повторить этот же запрос: сервер узнает его по идентификатору
+                    и не создаст второе сообщение.
                   </p>
+                  <p v-else>
+                    Проверьте архив или начните новый диалог.
+                  </p>
+                  <button v-if="retryable" :disabled="busy" @click="retry">
+                    Проверить ответ повторно
+                  </button>
                   <button @click="page = 'archive'">Проверить архив</button>
                 </div>
                 <div v-if="lead" class="lead-success" role="status">

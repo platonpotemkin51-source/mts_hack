@@ -39,6 +39,7 @@ def generate(
     *,
     transport: httpx.BaseTransport | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    deadline: float | None = None,
 ) -> str:
     """Generate one answer, retrying only transient failures at most twice."""
     base = _setting("LLM_BASE_URL", "OPENAI_BASE_URL").rstrip("/")
@@ -63,24 +64,30 @@ def generate(
         "max_tokens": max_tokens,
     }
     try:
-        with httpx.Client(timeout=httpx.Timeout(45.0, connect=8.0),
+        with httpx.Client(timeout=httpx.Timeout(25.0, connect=8.0),
                           follow_redirects=False, transport=transport) as client:
             for attempt in range(3):
+                remaining = deadline - time.monotonic() if deadline is not None else 25.0
+                if remaining <= 2.0:
+                    raise ModelUnavailable("Model deadline reached")
                 try:
                     response = client.post(
                         base + "/chat/completions",
                         headers={"Authorization": "Bearer " + key},
                         json=payload,
+                        timeout=httpx.Timeout(min(25.0, remaining - 2.0), connect=min(8.0, remaining - 2.0)),
                     )
                 except httpx.TransportError as exc:
                     if attempt == 2:
                         raise ModelUnavailable("Model proxy connection failed") from exc
-                    sleep(0.5 * (attempt + 1))
+                    sleep(min(0.5 * (attempt + 1), max(0.0, deadline - time.monotonic() - 2.0))
+                          if deadline is not None else 0.5 * (attempt + 1))
                     continue
                 if response.status_code in (429, 500, 502, 503, 504):
                     if attempt == 2:
                         raise ModelUnavailable("Model proxy is temporarily unavailable")
-                    sleep(0.5 * (attempt + 1))
+                    sleep(min(0.5 * (attempt + 1), max(0.0, deadline - time.monotonic() - 2.0))
+                          if deadline is not None else 0.5 * (attempt + 1))
                     continue
                 if response.status_code in (401, 403):
                     raise ModelUnavailable("Model proxy access was denied")
