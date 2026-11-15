@@ -28,8 +28,10 @@ SYSTEM_RULES = """Ты — консультант МТС Energytool. Отвеч�
 Верни ТОЛЬКО JSON: {"answer": str, "brief": {"object": str|null,
 "problem": str|null, "known_parameters": [str], "recommended_products": [str],
 "missing_fields": [str]}, "lead_offer": bool, "used_chunk_ids": [str]}.
-В used_chunk_ids включай только ID реально использованных фрагментов. Если фрагменты
+В used_chunk_ids включай только короткие ID C1, C2 и т. д. реально использованных фрагментов. Если фрагменты
 не подходят, оставь список пустым и не утверждай продуктовых фактов. Обычно до 150 слов.
+Если нужно только уточнить объект, задачу или количество точек учёта, задай один
+конкретный вопрос без продуктовых утверждений; для такого вопроса источник не нужен.
 """
 
 
@@ -53,45 +55,128 @@ def _clean_list(value: object) -> list[str]:
     return result
 
 
-def _parse_model_answer(raw: str) -> dict:
+def _parse_model_answer(raw: str, *, current_brief: ClientBrief | None = None,
+                        competition: bool = False) -> dict:
     candidate = raw.strip()
-    if candidate.startswith("```json"):
-        candidate = candidate[7:].strip()
-        if candidate.endswith("```"):
-            candidate = candidate[:-3].strip()
-    try:
-        value = json.loads(candidate)
-    except (TypeError, ValueError) as exc:
-        raise InvalidModelAnswer("Model did not return valid JSON") from exc
+    decoder = json.JSONDecoder()
+    value = None
+    for match in re.finditer(r"\{", candidate):
+        try:
+            parsed, _end = decoder.raw_decode(candidate, match.start())
+        except ValueError:
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("answer"), str):
+            value = parsed
+            break
+    if value is None:
+        safe_plain = _safe_unsourced_answer(candidate) if competition else None
+        if safe_plain:
+            value = {"answer": safe_plain, "brief": None, "lead_offer": False,
+                     "used_chunk_ids": []}
+        else:
+            raise InvalidModelAnswer("Model did not return valid JSON")
     if not isinstance(value, dict) or not isinstance(value.get("answer"), str):
         raise InvalidModelAnswer("Model did not return an answer")
     if not value["answer"].strip() or len(value["answer"]) > 10_000:
         raise InvalidModelAnswer("Model answer length is invalid")
     brief = value.get("brief")
-    if not isinstance(brief, dict):
+    if not isinstance(brief, dict) and not competition:
         raise InvalidModelAnswer("Model did not return a brief")
-    value["brief"] = ClientBrief(
-        object=_clean_string(brief.get("object")),
-        problem=_clean_string(brief.get("problem")),
-        known_parameters=_clean_list(brief.get("known_parameters")),
-        recommended_products=_clean_list(brief.get("recommended_products")),
-        missing_fields=_clean_list(brief.get("missing_fields")),
-    )
-    if not isinstance(value.get("lead_offer"), bool):
+    if isinstance(brief, dict):
+        try:
+            value["brief"] = ClientBrief(
+                object=_clean_string(brief.get("object")),
+                problem=_clean_string(brief.get("problem")),
+                known_parameters=_clean_list(brief.get("known_parameters")),
+                recommended_products=_clean_list(brief.get("recommended_products")),
+                missing_fields=_clean_list(brief.get("missing_fields")),
+            )
+        except InvalidModelAnswer:
+            if not competition:
+                raise
+            value["brief"] = current_brief or ClientBrief()
+            value["auxiliary_error"] = True
+    else:
+        value["brief"] = current_brief or ClientBrief()
+        value["auxiliary_error"] = True
+    if not isinstance(value.get("lead_offer"), bool) and not competition:
         raise InvalidModelAnswer("Model did not return a lead decision")
-    if not isinstance(value.get("used_chunk_ids"), list) or not all(
-        isinstance(x, str) for x in value["used_chunk_ids"]
-    ):
+    value["lead_offer"] = value.get("lead_offer") is True
+    source_ids = value.get("used_chunk_ids")
+    if source_ids is None and competition:
+        source_ids = []
+    if not isinstance(source_ids, list) or not all(isinstance(x, str) for x in source_ids):
         raise InvalidModelAnswer("Model did not return source IDs")
+    value["used_chunk_ids"] = source_ids
     return value
 
 
+def _safe_unsourced_answer(answer: str) -> str | None:
+    """Convert an unsourced answer to a fixed safe clarification or refusal.
+
+    Never echo model-supplied wording when there is no verified source. A
+    question can contain a product promise just as easily as a statement.
+    """
+    answer = " ".join(answer.split())
+    if not answer or len(answer) > 350 or re.search(r"\d|₽|%", answer):
+        return None
+    declined = bool(re.match(r"^(?:конечно[,!.]?\s*)?телефон пока не нужен[.!]?", answer, re.I))
+    answer = re.sub(r"^(?:конечно[,!.]?\s*|телефон пока не нужен[.!]?\s*|"
+                    r"можем продолжить без контактов[.!]?\s*)+", "", answer, flags=re.I)
+    if answer.endswith("?") and answer.count("?") == 1 and answer.count(".") == 0:
+        if not re.match(r"^(?:подскажите|уточните|скажите|какой|какая|какие|сколько|"
+                        r"что именно|есть ли|вам нужен|вы хотите)\b", answer, re.I):
+            return None
+        topic = answer.lower().replace("ё", "е")
+        if re.search(r"точ|счетчик|прибор", topic):
+            question = "Сколько точек учёта у вас?"
+        elif re.search(r"тип|объект", topic):
+            question = "Какой у вас тип объекта?"
+        elif "регион" in topic:
+            question = "В каком регионе находится объект?"
+        elif re.search(r"показан|собира", topic):
+            question = "Как сейчас собираются показания?"
+        else:
+            question = "Какую задачу вы хотите решить?"
+        return ("Телефон пока не нужен. " if declined else "") + question
+    if re.match(r"^(?:в (?:доступной|предоставленной) базе нет|"
+                r"точной цены в (?:доступной|предоставленной) базе нет|"
+                r"не удалось найти)", answer, re.I):
+        if re.search(r"цен|стоим", answer, re.I):
+            return "Точной цены для вашего объекта в предоставленной базе нет. Для расчёта обратитесь к специалисту."
+        return "В предоставленной базе нет достаточных сведений для точного ответа. Обратитесь к специалисту."
+    return None
+
+
+def _explicit_lead_request(message: str) -> bool:
+    if re.search(
+        r"\bне\s+(?:хочу|готов|нужно|надо|могу|буду|планирую)\b.{0,35}"
+        r"(?:связаться со специалистом|оставить заявку|перезвонить|обратный звонок)",
+        message, re.I,
+    ):
+        return False
+    return bool(re.search(r"(?:хочу|прошу|можно|готов|нужно|давайте).{0,35}(?:связаться со специалистом|оставить заявку|перезвонить|обратный звонок)", message, re.I))
+
+
 def _search_query(message: str, history: list[ChatMessage], brief: ClientBrief) -> str:
-    """Resolve short follow-ups against recent user turns and the current brief."""
-    parts = [message]
-    if len(message.split()) < 12 or re.search(r"\b(это|они|такое|сколько|а если)\b", message, re.I):
-        parts.extend(item.content for item in history[-6:] if item.role == "user")
-        parts.extend(x for x in (brief.object, brief.problem) if x)
+    """Keep the current goal and recent user context, independent of turn length."""
+    parts = [message.strip()]
+    topic_changed = bool(re.search(
+        r"\b(?:а теперь|теперь (?:другой|про)|другая тема|перейд[её]м|сменим тему|новый вопрос)\b",
+        message, re.I))
+    if not topic_changed:
+        previous = [item.content.strip() for item in history if item.role == "user" and item.content.strip()]
+        parts.extend(reversed(previous[-3:]))
+        parts.extend(x for x in (brief.object, brief.problem, *brief.known_parameters[:5]) if x)
+    joined = " ".join(parts).lower().replace("ё", "е")
+    # Search vocabulary only: these phrases are document headings, not facts
+    # inserted into the answer. They apply to any matching user wording.
+    if "оптов" in joined and re.search(r"провер\w*.*учет|учет.*провер\w*", joined):
+        parts.append("аудит существующей системы учета порог присоединенной мощности")
+    if re.search(r"(?:автоматическ\w*|платформ\w*)\s+учет", joined) and re.search(
+        r"оценк|понадоб|какие данные|что нужно", joined
+    ):
+        parts.append("какие сведения могут понадобиться для платформы учета")
     return " ".join(parts)[:2000]
 
 
@@ -122,9 +207,19 @@ def _declined_contacts(history: list[ChatMessage], message: str) -> bool:
 
 class Consultant:
     def __init__(self, retriever: Retriever,
-                 generate_fn: Callable[[list[dict[str, str]]], str] = generate) -> None:
+                 generate_fn: Callable[[list[dict[str, str]]], str] = generate,
+                 *, competition: bool = False,
+                 context_expansion: bool = False,
+                 diagnostic_fn: Callable[[str, object | None], None] | None = None) -> None:
         self.retriever = retriever
         self.generate_fn = generate_fn
+        self.competition = competition
+        self.context_expansion = context_expansion
+        self.diagnostic_fn = diagnostic_fn
+
+    def _event(self, name: str, value: object | None = None) -> None:
+        if self.diagnostic_fn is not None:
+            self.diagnostic_fn(name, value)
 
     def respond(
         self,
@@ -140,7 +235,7 @@ class Consultant:
         if _out_of_scope(message):
             return ConsultationResult(
                 answer="Я могу помочь выбрать решение Energytool, но не даю инструкции по настройке приборов и систем учёта. Для этого обратитесь к техническому специалисту.",
-                sources=[], brief=brief,
+                sources=[], brief=brief, lead_offer=_explicit_lead_request(message),
                 timings=Timings(total_ms=round((time.monotonic() - started) * 1000, 2)),
             )
         retrieval_started = time.monotonic()
@@ -148,11 +243,17 @@ class Consultant:
             top_k = int(os.getenv("TOP_K", "6"))
         except ValueError as exc:
             raise ValueError("TOP_K must be an integer") from exc
-        chunks = self.retriever.retrieve(_search_query(message, history, brief), top_k=top_k)
+        query = _search_query(message, history, brief)
+        expansion = getattr(self.retriever, "retrieve_with_overviews", None)
+        chunks = (expansion(query, top_k=top_k) if self.context_expansion and callable(expansion)
+                  else self.retriever.retrieve(query, top_k=top_k))
+        if len(chunks) > top_k:
+            self._event("context_expansions", len(chunks) - top_k)
         retrieval_ms = round((time.monotonic() - retrieval_started) * 1000, 2)
+        aliases = {f"C{index}": chunk.chunk_id for index, chunk in enumerate(chunks, 1)}
         context = [
-            {"chunk_id": c.chunk_id, "source": c.source, "title": c.title, "text": c.text}
-            for c in chunks
+            {"chunk_id": alias, "source": c.source, "title": c.title, "text": c.text}
+            for alias, c in zip(aliases, chunks)
         ]
         supplied = {
             "current_brief": vars(brief),
@@ -161,21 +262,49 @@ class Consultant:
             "knowledge_chunks": context,
         }
         generation_started = time.monotonic()
-        parsed = _parse_model_answer(self.generate_fn([
+        messages = [
             {"role": "system", "content": SYSTEM_RULES},
             {"role": "user", "content": json.dumps(supplied, ensure_ascii=False)},
-        ]))
+        ]
+        for attempt in range(2 if self.competition else 1):
+            try:
+                parsed = _parse_model_answer(self.generate_fn(messages),
+                                             current_brief=brief, competition=self.competition)
+                break
+            except InvalidModelAnswer:
+                self._event("parse_error")
+                if attempt or not self.competition:
+                    raise
+                messages = [*messages, {"role": "user", "content":
+                            "Повтори ответ строго одним JSON-объектом с answer и used_chunk_ids. "
+                            "Если это только уточняющий вопрос, used_chunk_ids может быть пустым."}]
         generation_ms = round((time.monotonic() - generation_started) * 1000, 2)
-        used = set(parsed["used_chunk_ids"])
+        if parsed.get("auxiliary_error"):
+            self._event("auxiliary_error")
+        used = set()
+        valid_ids = {c.chunk_id for c in chunks}
+        for identifier in parsed["used_chunk_ids"]:
+            resolved = aliases.get(identifier, identifier)
+            if resolved not in valid_ids:
+                self._event("unknown_source")
+            else:
+                used.add(resolved)
         sources = [chunk for chunk in chunks if chunk.chunk_id in used]
         if not sources:
             parsed["brief"].recommended_products = []
-            answer = "В предоставленной базе не нашлось достаточных сведений для точного ответа. Уточните вашу задачу или обратитесь к специалисту Energytool."
+            safe_answer = _safe_unsourced_answer(parsed["answer"])
+            if safe_answer:
+                answer = safe_answer
+                self._event("safe_unsourced_answer")
+            else:
+                answer = "В предоставленной базе не нашлось достаточных сведений для точного ответа. Уточните вашу задачу или обратитесь к специалисту Energytool."
+                self._event("general_refusal")
         else:
             answer = parsed["answer"].strip()
         declined = _declined_contacts(history, message)
         user_turns = sum(item.role == "user" for item in history) + 1
-        lead_offer = bool(parsed["lead_offer"] and user_turns >= 2 and not declined)
+        requested = _explicit_lead_request(message)
+        lead_offer = bool(requested or (parsed["lead_offer"] and user_turns >= 2 and not declined))
         return ConsultationResult(
             answer=answer, sources=sources, brief=parsed["brief"], lead_offer=lead_offer,
             timings=Timings(retrieval_ms, generation_ms,

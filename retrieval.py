@@ -81,6 +81,12 @@ class BM25Retriever:
         if not chunks:
             raise ValueError("Cannot index an empty knowledge base")
         self._chunks = tuple(chunks)
+        self._overviews = {
+            chunk.source: chunk for chunk in chunks
+            if chunk.source.startswith("20-products/")
+            and not chunk.source.endswith("20-portfolio.md")
+            and chunk.title.endswith(" / Что это")
+        }
         self._expand = expand
         self._lengths: list[int] = []
         postings: dict[str, list[tuple[int, int]]] = defaultdict(list)
@@ -112,6 +118,23 @@ class BM25Retriever:
                 if len(result) == top_k:
                     break
         return result
+
+    def retrieve_with_overviews(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
+        """Add overview sections when two products compete in one question.
+
+        Keep all ranked results, including limitations; add at most two short
+        companion sections. This is not a global top-k increase.
+        """
+        ranked = self.retrieve(query, top_k=top_k)
+        counts = Counter(chunk.source for chunk in ranked)
+        eligible = [source for source, count in counts.items()
+                    if count >= 2 and source in self._overviews]
+        if len(eligible) < 2:
+            return ranked
+        present = {chunk.chunk_id for chunk in ranked}
+        extras = [replace(self._overviews[source], score=0.0) for source in eligible[:2]
+                  if self._overviews[source].chunk_id not in present]
+        return ranked + extras
 
 
 class EmbeddingError(RuntimeError):
