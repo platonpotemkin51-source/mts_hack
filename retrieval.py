@@ -87,6 +87,17 @@ class BM25Retriever:
             and not chunk.source.endswith("20-portfolio.md")
             and chunk.title.endswith(" / Что это")
         }
+        self._evidence_products = {c.chunk_id: c.source for c in chunks if c.source in self._overviews}
+        for chunk in chunks:
+            if not chunk.source.startswith("00-reference/"):
+                continue
+            heading = set(tokenize(chunk.title.rsplit(" / ", 1)[-1])) - {"для"}
+            scores = [(len(heading & set(tokenize(overview.title.split(" / ")[0]))), source)
+                      for source, overview in self._overviews.items()]
+            scores.sort(reverse=True)
+            if (heading and scores and scores[0][0] / len(heading) >= 0.5
+                    and (len(scores) == 1 or scores[0][0] > scores[1][0])):
+                self._evidence_products[chunk.chunk_id] = scores[0][1]
         self._expand = expand
         self._lengths: list[int] = []
         postings: dict[str, list[tuple[int, int]]] = defaultdict(list)
@@ -135,6 +146,51 @@ class BM25Retriever:
         extras = [replace(self._overviews[source], score=0.0) for source in eligible[:2]
                   if self._overviews[source].chunk_id not in present]
         return ranked + extras
+
+    def retrieve_with_evidence(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
+        """Fill missing applicability/limits for up to two supported products.
+
+        shortcut: heading-based coverage, not proof of semantic sufficiency;
+        upgrade only after measuring missed conditions on held-out questions.
+        """
+        ranked = self.retrieve_with_overviews(query, top_k)
+        if not ranked:
+            return ranked
+        counts = Counter(c.source for c in ranked[:top_k])
+        products = [source for source, count in counts.items()
+                    if source in self._overviews and (count >= 2 or source == ranked[0].source)][:2]
+        candidates = {source: self.retrieve(
+            query + " " + self._overviews[source].title.split(" / ")[0], top_k=len(self._chunks))
+            for source in products}
+        present = {c.chunk_id for c in ranked}
+        added = []
+        remaining = 4000
+        roles = [
+            ("scope", r"не подходит|порог доступа|целевой диапазон|лучший профиль"),
+            ("limits", r"что мы не делаем|чего утверждать нельзя|важное ограничение"),
+        ]
+        if re.search(r"данн|оценк|начат|хват|понадоб|что нужно|с чего", query, re.I):
+            roles.insert(0, ("inputs", r"что нужно от клиента"))
+        for role, pattern in roles:
+            for source in products:
+                def relevant(chunk):
+                    if self._evidence_products.get(chunk.chunk_id) != source:
+                        return False
+                    if chunk.source.startswith("00-reference/"):
+                        return ((role == "inputs" and "Какие сведения" in chunk.title)
+                                or (role == "limits" and "Область применения" in chunk.title))
+                    return bool(re.search(pattern, chunk.title.rsplit(" / ", 1)[-1], re.I))
+                if any(relevant(c) for c in ranked + added):
+                    continue
+                for chunk in candidates[source]:
+                    if relevant(chunk) and chunk.chunk_id not in present and len(chunk.text) <= remaining:
+                        added.append(replace(chunk, score=0.0))
+                        present.add(chunk.chunk_id)
+                        remaining -= len(chunk.text)
+                        break
+                if len(added) == 3:
+                    return ranked + added
+        return ranked + added
 
 
 class EmbeddingError(RuntimeError):

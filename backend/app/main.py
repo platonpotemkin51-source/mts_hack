@@ -70,7 +70,9 @@ def create_app(*, retriever=None, generate_fn=None, db_path: Path | None = None)
                 Path(os.getenv("DATA_DIR", "data")) / "knowledge-base.zip",
                 Path(os.getenv("CACHE_DIR", "runtime/index")),
             )
-            app.state.consultant = Consultant(source, generate_fn) if generate_fn else Consultant(source)
+            options = {"context_expansion": os.getenv("CONTEXT_EXPANSION", "1") != "0"}
+            app.state.consultant = (Consultant(source, generate_fn, **options) if generate_fn
+                                    else Consultant(source, **options))
         except (OSError, ValueError, RuntimeError) as exc:
             # Health remains available and chat reports 503 until configuration is fixed.
             app.state.startup_error = type(exc).__name__

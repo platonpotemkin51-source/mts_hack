@@ -272,6 +272,8 @@ class Consultant:
             raise ValueError("TOP_K must be an integer") from exc
         query = _search_query(message, history, brief)
         expansion = getattr(self.retriever, "retrieve_with_overviews", None)
+        if os.getenv("EVIDENCE_COMPLETION", "1") != "0":
+            expansion = getattr(self.retriever, "retrieve_with_evidence", expansion)
         chunks = (expansion(query, top_k=top_k) if self.context_expansion and callable(expansion)
                   else self.retriever.retrieve(query, top_k=top_k))
         if len(chunks) > top_k:
