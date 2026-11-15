@@ -132,7 +132,7 @@ def _parse_model_answer(raw: str, *, current_brief: ClientBrief | None = None,
     return value
 
 
-def _safe_unsourced_answer(answer: str) -> str | None:
+def _safe_unsourced_answer(answer: str, *, client_text: str = "") -> str | None:
     """Convert an unsourced answer to a fixed safe clarification or refusal.
 
     Never echo model-supplied wording when there is no verified source. A
@@ -145,11 +145,15 @@ def _safe_unsourced_answer(answer: str) -> str | None:
     answer = re.sub(r"^(?:конечно[,!.]?\s*|телефон пока не нужен[.!]?\s*|"
                     r"можем продолжить без контактов[.!]?\s*)+", "", answer, flags=re.I)
     if answer.endswith("?") and answer.count("?") == 1 and answer.count(".") == 0:
-        if not re.match(r"^(?:подскажите|уточните|скажите|какой|какая|какие|сколько|"
+        if not re.match(r"^(?:подскажите|уточните|скажите|как|какой|какая|какие|сколько|"
                         r"что именно|есть ли|вам нужен|вы хотите)\b", answer, re.I):
             return None
         topic = answer.lower().replace("ё", "е")
-        if re.search(r"точ|счетчик|прибор", topic):
+        if re.search(r"модел|производител|тип.*прибор", topic):
+            question = "Какие модели приборов у вас установлены?"
+        elif re.search(r"показан|собира", topic) and not re.search(r"сколько|количеств", topic):
+            question = "Как сейчас собираются показания?"
+        elif re.search(r"точ|счетчик|прибор", topic):
             question = "Сколько точек учёта у вас?"
         elif re.search(r"тип|объект", topic):
             question = "Какой у вас тип объекта?"
@@ -159,6 +163,17 @@ def _safe_unsourced_answer(answer: str) -> str | None:
             question = "Как сейчас собираются показания?"
         else:
             question = "Какую задачу вы хотите решить?"
+        known = {
+            "Сколько точек учёта у вас?": bool(re.search(r"\d+\s*(?:сч[её]тчик|прибор|точ[ек])", client_text, re.I)),
+            "Какой у вас тип объекта?": bool(re.search(r"\b(?:склад|завод|офис|магазин|производств|бизнес-центр|СНТ)\w*", client_text, re.I)),
+            "В каком регионе находится объект?": bool(re.search(r"\b(?:регион|област|край|республик)\w*\s+\S+", client_text, re.I)),
+            "Как сейчас собираются показания?": bool(re.search(
+                r"(?:собира\w*|снима\w*|переда\w*)\s+(?:показания\s+)?(?:вручную|по фото|через|автоматически)", client_text, re.I)),
+        }
+        if known.get(question):
+            question = next((q for q in ("Какой у вас тип объекта?", "Сколько точек учёта у вас?",
+                                        "Как сейчас собираются показания?", "В каком регионе находится объект?") if not known.get(q)),
+                            "Какие сведения о вашей задаче ещё стоит уточнить?")
         return ("Телефон пока не нужен. " if declined else "") + question
     if re.match(r"^(?:в (?:доступной|предоставленной) базе нет|"
                 r"точной цены в (?:доступной|предоставленной) базе нет|"
@@ -172,23 +187,83 @@ def _safe_unsourced_answer(answer: str) -> str | None:
 def _explicit_lead_request(message: str) -> bool:
     if re.search(
         r"\bне\s+(?:хочу|готов|нужно|надо|могу|буду|планирую)\b.{0,35}"
-        r"(?:связаться со специалистом|оставить заявку|перезвонить|обратный звонок)",
+        r"(?:связаться с (?:менеджером|консультантом)|связаться со специалистом|оставить заявку|перезвонить|обратный звонок)",
         message, re.I,
     ):
         return False
-    return bool(re.search(r"(?:хочу|прошу|можно|готов|нужно|давайте).{0,35}(?:связаться со специалистом|оставить заявку|перезвонить|обратный звонок)", message, re.I))
+    if re.search(r"(?:хочу|прошу|можно|готов|нужно|давайте).{0,35}(?:связаться с (?:менеджером|консультантом)|связаться со специалистом|оставить заявку|перезвонить|обратный звонок)", message, re.I):
+        return True
+    for request in re.finditer(r"\b(?:перезвоните|позвоните|свяжите меня|передайте (?:заявку|обращение|контакты|менеджеру))\b", message, re.I):
+        if not re.search(r"\bне\s*$", message[:request.start()], re.I):
+            return True
+    return False
+
+
+_TOPIC_CHANGE = re.compile(
+    r"\b(?:а теперь|теперь (?:другой|про)|другая тема|перейд[её]м|сменим тему|новый вопрос|другой объект|новый объект)\b", re.I)
+_CORRECTION = re.compile(r"\b(?:исправляю|исправление|уточню|поправка|ошибся|ошиблась|вместо)\b|\bне\s+\d+.{0,25}\bа\s+\d+", re.I)
+_QUANTITY = re.compile(r"(?P<number>\d{1,3}(?:[ \u00a0]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?P<unit>квт[·⋅*-]?ч|квт|мвт|сч[её]тчик\w*|прибор\w*|склад\w*|объект\w*)\b", re.I)
+
+
+def _active_users(history: list[ChatMessage], message: str) -> list[str]:
+    users = [x.content.strip() for x in history if x.role == "user" and x.content.strip()] + [message.strip()]
+    starts = [i for i, text in enumerate(users) if _TOPIC_CHANGE.search(text)]
+    return users[starts[-1]:] if starts else users
+
+
+def _quantity_key(match):
+    unit = match["unit"].lower().replace("ё", "е")
+    if unit.startswith(("счетчик", "прибор")):
+        kind = "meters"
+    elif unit in ("квт", "мвт"):
+        kind = "power"
+    elif unit.startswith("квт"):
+        kind = "energy"
+    else:
+        kind = "sites" if unit.startswith("объект") else "warehouses"
+    number = float(re.sub(r"\s", "", match["number"]).replace(",", ".")) * (1000 if unit == "мвт" else 1)
+    return kind, number
+
+
+def _model_history(history: list[ChatMessage]) -> list[dict]:
+    # Keep early facts in long CSV dialogues, within a bounded prompt budget.
+    selected = []
+    remaining = 24000
+    for index in reversed(range(len(history))):
+        item = history[index]
+        if len(item.content) <= remaining:
+            selected.append(index)
+            remaining -= len(item.content)
+    return [vars(history[i]) for i in sorted(selected)]
+
+
+def _corrected_quantities(users: list[str]) -> dict:
+    corrected = {}
+    for text in users:
+        if _CORRECTION.search(text):
+            text = re.sub(r"не\s+\d+\s*((?:сч[её]тчик|прибор)\w*)\s*[,—-]?\s*а\s+(\d+)",
+                          r"\2 \1", text, flags=re.I)
+            corrected.update(_quantity_key(m) for m in _QUANTITY.finditer(text))
+    return corrected
 
 
 def _search_query(message: str, history: list[ChatMessage], brief: ClientBrief) -> str:
     """Keep the current goal and recent user context, independent of turn length."""
     parts = [message.strip()]
-    topic_changed = bool(re.search(
-        r"\b(?:а теперь|теперь (?:другой|про)|другая тема|перейд[её]м|сменим тему|новый вопрос)\b",
-        message, re.I))
+    topic_changed = bool(_TOPIC_CHANGE.search(message))
+    users = _active_users(history, message)
     if not topic_changed:
-        previous = [item.content.strip() for item in history if item.role == "user" and item.content.strip()]
+        previous = users[:-1]
         parts.extend(reversed(previous[-3:]))
+        if previous and previous[0] not in previous[-3:]:
+            parts.append(previous[0])
         parts.extend(x for x in (brief.object, brief.problem, *brief.known_parameters[:5]) if x)
+    corrected = _corrected_quantities(users)
+    if corrected:
+        def remove_old(match):
+            kind, value = _quantity_key(match)
+            return "" if kind in corrected and corrected[kind] != value else match.group()
+        parts[1:] = [_QUANTITY.sub(remove_old, part) for part in parts[1:]]
     joined = " ".join(parts).lower().replace("ё", "е")
     # Search vocabulary only: these phrases are document headings, not facts
     # inserted into the answer. They apply to any matching user wording.
@@ -286,7 +361,7 @@ class Consultant:
         ]
         supplied = {
             "current_brief": vars(brief),
-            "history": [vars(item) for item in history[-12:]],
+            "history": _model_history(history),
             "current_message": message,
             "knowledge_chunks": context,
         }
@@ -310,21 +385,28 @@ class Consultant:
         generation_ms = round((time.monotonic() - generation_started) * 1000, 2)
         if parsed.get("auxiliary_error"):
             self._event("auxiliary_error")
+        client_text = "\n".join(_active_users(history, message))
         user_texts = [*(item.content for item in history if item.role == "user"), message]
         reset_pattern = (r"\b(?:исправляю|исправление|уточню|поправка|ошибся|ошиблась|"
                          r"другой объект|новый объект|другая тема)\b|\bне\s+\d+.{0,25}\bа\s+\d+")
         reset_indices = [i for i, text in enumerate(user_texts) if re.search(reset_pattern, text, re.I)]
         evidence_texts = user_texts[reset_indices[-1]:] if reset_indices else user_texts
+        corrected = _corrected_quantities(_active_users(history, message))
+        # A count correction does not erase the client's unchanged goal/object.
+        if corrected and reset_indices and _QUANTITY.search(user_texts[reset_indices[-1]]) and not _TOPIC_CHANGE.search(user_texts[reset_indices[-1]]):
+            evidence_texts = _active_users(history, message)
         evidence = parsed.get("manager_evidence")
         excerpts = []
         if isinstance(evidence, list):
             for excerpt in evidence[:3]:
                 if (isinstance(excerpt, str) and excerpt.strip() and len(excerpt) <= 220
                         and any(excerpt in text for text in evidence_texts) and excerpt not in excerpts
+                        and not any(kind in corrected and corrected[kind] != value
+                                    for kind, value in map(_quantity_key, _QUANTITY.finditer(excerpt)))
                         and not re.search(r"\+?\d[\d ()-]{8,}\d", excerpt)):
                     excerpts.append(excerpt)
         if reset_indices:
-            correction = evidence_texts[0]
+            correction = user_texts[reset_indices[-1]]
             if len(correction) <= 220 and not re.search(r"\+?\d[\d ()-]{8,}\d", correction):
                 excerpts = [correction, *(text for text in excerpts if text not in correction)][:3]
         parsed["brief"].manager_summary = (
@@ -352,7 +434,8 @@ class Consultant:
                 safe_answer = ("Для связи со специалистом укажите ФИО, телефон и компанию "
                                "и подтвердите согласие на связь.")
             else:
-                safe_answer = _safe_unsourced_answer(parsed["answer"])
+                safe_answer = _safe_unsourced_answer(parsed["answer"],
+                                                     client_text=client_text)
             if safe_answer:
                 answer = safe_answer
                 self._event("safe_unsourced_answer")
