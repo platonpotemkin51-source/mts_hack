@@ -78,6 +78,11 @@ class DialogueTests(unittest.TestCase):
         self.assertIn("60 кВт", query)
         self.assertNotIn("17 приборов", query)
 
+    def test_old_value_after_instead_does_not_restore_obsolete_query(self):
+        query = _search_query('Исправляю: 24 прибора вместо 17 приборов.',
+                              [ChatMessage('user', 'На складе 17 приборов.')], ClientBrief())
+        self.assertEqual(query.count('17 приборов'), 1)  # only the explicit old value in the current statement
+
     def test_old_topic_is_not_reintroduced_on_later_turn(self):
         history = [ChatMessage("user", "На заводе нужен оптовый рынок."),
                    ChatMessage("user", "А теперь другой вопрос: солнечная станция."),

@@ -57,6 +57,20 @@ manager_evidence — до трёх коротких ДОСЛОВНЫХ фраг�
 """
 
 
+COMPLETENESS_RULES = """
+Проверь, что ответ покрывает важные части последнего вопроса. Примени уже названные
+параметры к выводу, не запрашивая их повторно. Не копируй анкету из базы целиком:
+вычеркни из неё уже известные объект, количество и другие сведения клиента.
+Если запрошенный продукт не решает цель, но в knowledge_chunks есть
+подходящая альтернатива, назови её и существенное условие. Если различаются порог
+допуска и ориентир целесообразности, поясни оба применительно к данным клиента.
+Если условие задано числовой границей, назови эту границу с единицей измерения.
+Не добавляй примеры технологий и способов сбора, которых нет в knowledge_chunks.
+На вопрос о недостающих данных отвечай списком названий ещё неизвестных полей,
+без примеров их возможных значений.
+Не задавай вопрос ради самого вопроса; максимум одно нужное уточнение."""
+
+
 def _clean_string(value: object, *, maximum: int = 500) -> str | None:
     if value is None:
         return None
@@ -212,6 +226,26 @@ def _active_users(history: list[ChatMessage], message: str) -> list[str]:
     return users[starts[-1]:] if starts else users
 
 
+def _client_fields(history: list[ChatMessage], message: str) -> list[dict[str, str]]:
+    """Expose only explicit user spans, never assistant guesses or KB facts."""
+    fields = {}
+    patterns = {
+        "тип объекта": r"\b(?:у нас|у меня|для|на|это)\s+(?P<fact>склад\w*|офис\w*|завод\w*|производств\w*|магазин\w*|бизнес[- ‑]центр\w*|СНТ)\b",
+        "количество приборов": r"(?P<fact>не\s+\d+\s+(?:прибор|сч[её]тчик)\w*\s*[,—-]?\s*а\s+\d+|\d+\s*(?:прибор|сч[её]тчик)\w*)\b",
+        "способ сбора показаний": r"(?P<fact>(?:собираем|снимаем|переда[её]м)\s+(?:показания\s+)?(?:вручную|по фото|автоматически))\b",
+        "модели приборов": r"(?:модел\w*|установлен\w*|прибор\w*|сч[её]тчик\w*)\s+(?P<fact>[a-z][a-z0-9]*[-‑]\d+)\b",
+    }
+    for text in _active_users(history, message):
+        if re.search(r"\b(?:если|например|допустим|предположим)\b", text, re.I):
+            continue
+        for field, pattern in patterns.items():
+            for match in re.finditer(pattern, text, re.I):
+                if re.search(r"\b(?:вместо|а\s+не|не)\s*$", text[:match.start()], re.I):
+                    continue
+                fields[field] = {"field": field, "user_quote": match["fact"]}
+    return list(fields.values())
+
+
 def _quantity_key(match):
     unit = match["unit"].lower().replace("ё", "е")
     if unit.startswith(("счетчик", "прибор")):
@@ -244,7 +278,8 @@ def _corrected_quantities(users: list[str]) -> dict:
         if _is_correction(text):
             text = re.sub(r"не\s+\d+\s*((?:сч[её]тчик|прибор)\w*)\s*[,—-]?\s*а\s+(\d+)",
                           r"\2 \1", text, flags=re.I)
-            corrected.update(_quantity_key(m) for m in _QUANTITY.finditer(text))
+            corrected.update(_quantity_key(m) for m in _QUANTITY.finditer(text)
+                             if not re.search(r"\b(?:вместо|а\s+не|не)\s*$", text[:m.start()], re.I))
     return corrected
 
 
@@ -320,12 +355,15 @@ REVIEW_RULES = """Проверь и исправь черновик ответа
 
 
 def _out_of_scope(message: str) -> bool:
-    return bool(re.search(
+    instructions = bool(re.search(
         r"(как\s+(?:настроить|прошить|подключить|смонтировать|установить|перепрограммировать)\s+"
         r"(?:сч[её]тчик|прибор|контроллер|систему)|схем[ау]\s+подключения|"
-        r"пошагов[а-я]*\s+инструкц[а-я]*\s+по\s+настройке|"
-        r"техническ[а-я]*\s+документац[а-я]*)", message, re.I
+        r"пошагов[а-я]*\s+инструкц[а-я]*\s+по\s+настройке)", message, re.I
     ))
+    documentation_request = re.search(
+        r"(?:покажи\w*|пришли\w*|пришлите|предостав\w*|дай\w*|нужн[а-я]*|где\s+найти)"
+        r"[^.!?\n]{0,45}\bтехническ[а-я]*\s+документац[а-я]*", message, re.I)
+    return instructions or bool(documentation_request)
 
 
 def _declined_contacts(history: list[ChatMessage], message: str) -> bool:
@@ -408,11 +446,21 @@ class Consultant:
             "current_message": message,
             "knowledge_chunks": context,
         }
+        if os.getenv("CLIENT_FACTS", "1") == "1":
+            supplied["already_known_client_fields"] = _client_fields(history, message)
         generation_started = time.monotonic()
         messages = [
             {"role": "system", "content": SYSTEM_RULES},
             {"role": "user", "content": json.dumps(supplied, ensure_ascii=False)},
         ]
+        if "already_known_client_fields" in supplied:
+            messages[0]["content"] += (
+                "\nВ already_known_client_fields перечислены поля, которые клиент уже сообщил, "
+                "с его дословными фрагментами. Не запрашивай эти поля снова и не включай их "
+                "в missing_fields. При исправлениях используй последнее значение, "
+                "не дополняй его догадками. Не копируй анкету целиком: перечисли только неизвестное.")
+        if os.getenv("ANSWER_COMPLETENESS", "1") == "1":
+            messages[0]["content"] += COMPLETENESS_RULES
         for attempt in range(2 if self.competition else 1):
             try:
                 parsed = _parse_model_answer(self.generate_fn(messages),
@@ -514,6 +562,16 @@ class Consultant:
         user_turns = sum(item.role == "user" for item in history) + 1
         requested = _explicit_lead_request(message)
         lead_offer = bool(requested or (parsed["lead_offer"] and user_turns >= 2 and not declined))
+        contact_given = any(re.search(r"(?<!\d)(?:\+7|8)[\d ()-]{9,}\d(?!\d)", text)
+                            for text in user_texts)
+        substantive_request = re.search(
+            r"\?|\b(?:как|что|сколько|како[йея]|можно|расскаж\w*|объясн\w*|"
+            r"уточн\w*|подбер\w*|стоим\w*|цен[ауы]\w*|подойд\w*)\b", message, re.I)
+        if requested and contact_given and not substantive_request:
+            answer = ("Контактный номер указан. Для передачи специалисту зафиксирую задачу "
+                      "и уже известные параметры. Недостающие сведения об объекте можно "
+                      "уточнить при консультации.")
+            self._event("handoff_acknowledged")
         if self.competition and lead_offer and parsed["brief"].manager_summary:
             handoff = "\n\nСуть обращения для специалиста: " + parsed["brief"].manager_summary
             if len(answer) + len(handoff) <= 10_000:
