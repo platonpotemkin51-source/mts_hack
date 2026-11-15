@@ -105,8 +105,19 @@ def generate(
                     if response.status_code != 200:
                         event("http_error", response.status_code)
                         if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:
-                            sleep(min(0.5 * (attempt + 1), max(0.0, deadline - time.monotonic() - 2.0))
-                                  if deadline is not None else 0.5 * (attempt + 1))
+                            delay = 0.5 * (attempt + 1)
+                            if response.status_code == 429:
+                                try:
+                                    advised = float(response.headers.get("retry-after", ""))
+                                except ValueError:
+                                    advised = 0.0
+                                if advised > 60:
+                                    raise ModelUnavailable("Model proxy quota is exhausted")
+                                delay = max(delay, advised)
+                                if deadline is not None and delay >= deadline - time.monotonic() - 2.0:
+                                    raise ModelUnavailable("Model deadline cannot accommodate rate-limit retry")
+                            sleep(min(delay, max(0.0, deadline - time.monotonic() - 2.0))
+                                  if deadline is not None else delay)
                             continue
                         if response.status_code in (401, 403):
                             raise ModelUnavailable("Model proxy access was denied")

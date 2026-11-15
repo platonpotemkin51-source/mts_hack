@@ -1,72 +1,97 @@
-"""Opening a consultation must not become a missing-knowledge refusal."""
+"""Natural dialogue survives without product citations; factual claims stay guarded."""
 import json
 import unittest
-from consultant import Consultant, _safe_unsourced_answer
+from consultant import Consultant, InvalidModelAnswer, _parse_model_answer
 from contracts import ChatMessage, ClientBrief, KnowledgeChunk
+from llm_client import ModelUnavailable
 
 
 class Retriever:
     def retrieve(self, query, top_k=6):
-        return [KnowledgeChunk('doc', 'invented.md', 'Макет', 'Вымышленный макет хранится в шкафу.')]
+        return [KnowledgeChunk('doc', 'invented.md', 'Макет', 'Макет собирает показания.')]
+
+
+def payload(answer, kind='clarification', ids=None):
+    return json.dumps({'answer_kind':kind,'answer':answer,'used_chunk_ids':ids or [],
+                       'lead_offer':False,'brief':{'object':None,'problem':None,'known_parameters':[],
+                                                 'recommended_products':[],'missing_fields':[]}})
 
 
 class OpeningTests(unittest.TestCase):
-    def respond(self, answer, message='Привет, помоги разобраться с расходами на электроэнергию', history=None):
-        def model(_):
-            return json.dumps({'answer': answer, 'used_chunk_ids': [], 'lead_offer': False,
-                               'brief': {'object': None, 'problem': None, 'known_parameters': [],
-                                         'recommended_products': [], 'missing_fields': []}})
-        return Consultant(Retriever(), model).respond(message=message, history=history or [], brief=ClientBrief())
+    def respond(self, replies, message='Нужна консультация', history=None):
+        calls=[]
+        def model(messages):
+            calls.append(messages)
+            value=replies[len(calls)-1]
+            if isinstance(value, Exception): raise value
+            return value
+        result=Consultant(Retriever(),model).respond(message=message,history=history or [],brief=ClientBrief())
+        return result,calls
 
-    def test_exact_reported_clarification_without_question_mark_starts_consultation(self):
-        result = self.respond('Уточните, пожалуйста, тип вашего объекта (например, магазин, ТСЖ, производственное предприятие) и количество точек учёта.')
-        self.assertTrue(result.answer.startswith('Здравствуйте!'))
-        self.assertIn('объект', result.answer)
-        self.assertEqual(result.answer.count('?'), 1)
-        self.assertEqual(result.sources, [])
-        self.assertFalse(result.lead_offer)
-
-    def test_greeting_and_preamble_do_not_discard_the_clarification(self):
-        for answer in ('Здравствуйте! Давайте разберёмся. Для начала уточните, пожалуйста, тип объекта.',
-                       'Здравствуйте! О каком объекте идёт речь?',
-                       'Здравствуйте! Какую задачу вы хотите решить?'):
+    def test_natural_clarifications_are_preserved_verbatim(self):
+        for answer in ('Здравствуйте! Расскажите, какой объект хотите обсудить.',
+                       'Понял, склад. Что изменилось: потребление или сумма платежа?',
+                       'Спасибо, картину понял. Можете прислать данные из последнего счёта?',
+                       'Продолжим без телефона. Опишите, как сейчас собираются показания.'):
             with self.subTest(answer=answer):
-                result = self.respond(answer)
-                self.assertTrue(result.answer.startswith('Здравствуйте!'))
-                self.assertEqual(result.answer.count('?'), 1)
-                self.assertNotIn('базе', result.answer)
+                result,calls=self.respond([payload(answer)],message='Склад',
+                    history=[ChatMessage('user','Помоги разобраться с расходами'),
+                             ChatMessage('assistant','Какой у вас объект?')])
+                self.assertEqual(result.answer,answer)
+                self.assertEqual(result.sources,[])
+                self.assertEqual(len(calls),1)
 
-    def test_greeting_and_broad_help_are_not_treated_as_missing_product_facts(self):
-        for message in ('Привет!', 'Здравствуйте', 'Нужна консультация по электроэнергии',
-                        'Помогите разобраться с расходами', 'Хочу снизить расходы на электричество'):
-            with self.subTest(message=message):
-                result = self.respond('В предоставленной базе нет сведений.', message=message)
-                self.assertTrue(result.answer.startswith('Здравствуйте!'))
-                self.assertIn('объект', result.answer)
-                self.assertNotIn('базе', result.answer)
-                self.assertEqual(result.answer.count('?'), 1)
+    def test_client_numbers_do_not_require_knowledge_sources(self):
+        answer='На складе 37 приборов, понял. Как сейчас получаете их показания?'
+        result,calls=self.respond([payload(answer)],message='У нас склад с 37 приборами.')
+        self.assertEqual(result.answer,answer)
+        self.assertEqual(len(calls),1)
 
-    def test_already_known_object_is_not_asked_again(self):
-        result = self.respond('Уточните тип объекта и количество точек учёта.',
-                              message='Привет, у нас склад, нужна консультация.')
-        self.assertNotIn('тип объекта', result.answer)
-        self.assertEqual(result.answer.count('?'), 1)
+    def test_specific_limitation_is_preserved_without_a_canned_refusal(self):
+        answer='Поддержка этого протокола в материалах не подтверждена. Какие приборы вы используете?'
+        result,calls=self.respond([payload(answer,'limitation')],message='Поддерживается ли тестовый протокол?')
+        self.assertEqual(result.answer,answer)
+        self.assertEqual(len(calls),1)
 
-    def test_followup_does_not_repeat_the_greeting(self):
-        result = self.respond('Уточните количество точек учёта.', message='А что ещё нужно?',
-                              history=[ChatMessage('user', 'Привет, у нас склад.')])
-        self.assertNotIn('Здравствуйте', result.answer)
+    def test_unclassified_natural_dialogue_is_repaired_once_instead_of_replaced(self):
+        answer='Понял, склад. Чтобы разобраться в ситуации, расскажите, что изменилось в счетах.'
+        draft=json.loads(payload(answer));draft.pop('answer_kind')
+        result,calls=self.respond([json.dumps(draft),payload(answer)],message='Склад')
+        self.assertEqual(result.answer,answer)
+        self.assertEqual(len(calls),2)
 
-    def test_unknown_fact_does_not_become_an_uncited_product_claim(self):
-        result = self.respond('Макет гарантированно снижает расходы на 91%.',
-                              message='Какую экономию гарантирует макет?')
-        self.assertNotIn('91', result.answer)
-        self.assertIn('не нашлось', result.answer)
+    def test_missing_citation_is_recovered_without_enabling_optional_review(self):
+        result,calls=self.respond([payload('Макет собирает показания.','grounded'),
+                                  payload('Макет собирает показания.','grounded',['C1'])])
+        self.assertEqual(result.answer,'Макет собирает показания.')
+        self.assertEqual(result.sources[0].chunk_id,'doc')
+        self.assertEqual(len(calls),2)
 
-    def test_unsafe_preface_is_not_echoed_with_a_safe_question(self):
-        answer = _safe_unsourced_answer('Наша система полностью бесплатная. Уточните тип объекта.')
-        self.assertEqual(answer, 'Какой у вас тип объекта?')
+    def test_dialogue_label_does_not_authorize_new_numeric_guarantees(self):
+        safe='Гарантированный процент экономии не указан. Какую задачу хотите решить?'
+        result,calls=self.respond([payload('Гарантируем экономию 91%.'),payload(safe,'limitation')],
+                                 message='Какая экономия?')
+        self.assertNotIn('91',result.answer)
+        self.assertEqual(result.answer,safe)
+        self.assertEqual(len(calls),2)
+
+    def test_failed_repair_does_not_pass_through_unverified_product_facts(self):
+        result,calls=self.respond([payload('Макет бесплатен.','grounded',['C99']),ModelUnavailable('timeout')],
+                                 message='Сколько стоит макет?')
+        self.assertNotIn('бесплатен',result.answer)
+        self.assertEqual(result.sources,[])
+        self.assertEqual(len(calls),2)
+
+    def test_unknown_answer_kind_is_rejected(self):
+        with self.assertRaises(InvalidModelAnswer):
+            _parse_model_answer(payload('Ответ.','arbitrary'),competition=True)
+
+    def test_internal_filenames_are_not_passed_as_answer_material(self):
+        result,calls=self.respond([payload('Что именно хотите выяснить?')])
+        supplied=json.loads(calls[0][1]['content'])
+        self.assertNotIn('invented.md',json.dumps(supplied['knowledge_chunks']))
+        self.assertEqual(supplied['knowledge_chunks'][0]['chunk_id'],'C1')
 
 
-if __name__ == '__main__':
+if __name__=='__main__':
     unittest.main()
