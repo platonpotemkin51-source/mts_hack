@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from solution import FALLBACK, run
+from solution import FALLBACK, main, run
 
 
 class FakeConsultant:
@@ -58,6 +58,11 @@ class SolutionTests(unittest.TestCase):
         self.write([("same", "A"), ("same", "B")])
         with self.assertRaises(ValueError):
             run(data_dir=self.data, output=self.root / "submission.csv", consultant=FakeConsultant())
+
+    def test_completed_csv_with_fallback_is_successful_submission(self):
+        # A fallback row must not turn a completed CSV into a failed run.
+        with patch("solution.run", return_value=(3, 1)):
+            main()
 
     def test_runtime_budget_reserves_time_to_write_csv(self):
         self.write([(str(index), "Вымышленный вопрос") for index in range(16)])

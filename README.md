@@ -38,7 +38,7 @@ py -3.11 -m venv .venv
 
 ### Настройки
 
-`LLM_BASE_URL` или `OPENAI_BASE_URL` — адрес прокси, без автоматического `/v1`; `LLM_API_KEY` или `OPENAI_API_KEY` — служебный ключ; `LLM_MODEL`, `OPENAI_MODEL` или `GEN_MODEL` — имя модели. Конкурсная платформа предоставляет их сама. Для генерации используется `{base_url}/chat/completions`; для embeddings — `{base_url}/embeddings`. `TEMPERATURE`, `MAX_TOKENS`, `MAX_WORKERS`, `TOP_K`, `DATA_DIR`, `CACHE_DIR`, `SQLITE_PATH` читаются из среды. `RETRIEVAL_MODE=bm25` работает без embeddings; `embeddings` и `hybrid` требуют доступа к прокси и пока не подтверждены на реальном сервисе. `SESSION_IDLE_MINUTES` закрывает потерянные активные сессии (по умолчанию 60 минут), сохраняя их в архиве.
+`LLM_BASE_URL`, `BASE_URL` или `OPENAI_BASE_URL` — адрес прокси, без автоматического `/v1`; `LLM_API_KEY` или `OPENAI_API_KEY` — служебный ключ; `LLM_MODEL`, `OPENAI_MODEL` или `GEN_MODEL` — имя модели. Конкурсная платформа предоставляет их сама. Для генерации используется `{base_url}/chat/completions`; для embeddings — `{base_url}/embeddings`. `TEMPERATURE`, `MAX_TOKENS`, `MAX_WORKERS`, `TOP_K`, `DATA_DIR`, `CACHE_DIR`, `SQLITE_PATH` читаются из среды. `RETRIEVAL_MODE=bm25` работает без embeddings; `embeddings` и `hybrid` требуют доступа к прокси и пока не подтверждены на реальном сервисе. `SESSION_IDLE_MINUTES` закрывает потерянные активные сессии (по умолчанию 60 минут), сохраняя их в архиве.
 
 ### Безопасный повтор и закрытие
 

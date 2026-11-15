@@ -28,7 +28,7 @@ def _setting(*names: str, default: str = "") -> str:
 def configured() -> bool:
     """Whether the three required proxy settings are present."""
     return bool(
-        _setting("LLM_BASE_URL", "OPENAI_BASE_URL")
+        _setting("LLM_BASE_URL", "BASE_URL", "OPENAI_BASE_URL")
         and _setting("LLM_API_KEY", "OPENAI_API_KEY")
         and _setting("LLM_MODEL", "OPENAI_MODEL", "GEN_MODEL")
     )
@@ -42,7 +42,7 @@ def generate(
     deadline: float | None = None,
 ) -> str:
     """Generate one answer, retrying only transient failures at most twice."""
-    base = _setting("LLM_BASE_URL", "OPENAI_BASE_URL").rstrip("/")
+    base = _setting("LLM_BASE_URL", "BASE_URL", "OPENAI_BASE_URL").rstrip("/")
     key = _setting("LLM_API_KEY", "OPENAI_API_KEY")
     model = _setting("LLM_MODEL", "OPENAI_MODEL", "GEN_MODEL")
     if not base or not key or not model:
@@ -51,10 +51,10 @@ def generate(
         raise ModelUnavailable("Model proxy URL is invalid")
     try:
         temperature = float(_setting("TEMPERATURE", default="0.2"))
-        max_tokens = int(_setting("MAX_TOKENS", default="700"))
+        max_tokens = int(_setting("MAX_TOKENS", default="2048"))
     except ValueError as exc:
         raise ModelUnavailable("Model generation settings are invalid") from exc
-    if not 0 <= temperature <= 2 or not 1 <= max_tokens <= 4096:
+    if not 0 <= temperature <= 2 or not 1 <= max_tokens <= 8192:
         raise ModelUnavailable("Model generation settings are out of range")
 
     payload = {
@@ -67,7 +67,8 @@ def generate(
         with httpx.Client(timeout=httpx.Timeout(25.0, connect=8.0),
                           follow_redirects=False, transport=transport) as client:
             for attempt in range(3):
-                remaining = deadline - time.monotonic() if deadline is not None else 25.0
+                attempt_timeout = 90.0 if deadline is not None else 25.0
+                remaining = deadline - time.monotonic() if deadline is not None else attempt_timeout
                 if remaining <= 2.0:
                     raise ModelUnavailable("Model deadline reached")
                 try:
@@ -75,7 +76,7 @@ def generate(
                         base + "/chat/completions",
                         headers={"Authorization": "Bearer " + key},
                         json=payload,
-                        timeout=httpx.Timeout(min(25.0, remaining - 2.0), connect=min(8.0, remaining - 2.0)),
+                        timeout=httpx.Timeout(min(attempt_timeout, remaining - 2.0), connect=min(8.0, remaining - 2.0)),
                     )
                 except httpx.TransportError as exc:
                     if attempt == 2:

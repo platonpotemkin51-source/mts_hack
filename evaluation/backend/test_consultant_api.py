@@ -129,6 +129,20 @@ class CoreTests(unittest.TestCase):
                 generate([], transport=httpx.MockTransport(handler),
                          deadline=time.monotonic() - 1, sleep=lambda _: None)
 
+    def test_competition_proxy_alias_and_token_budget(self):
+        captured = []
+        def handler(request):
+            captured.append(request)
+            return httpx.Response(200, json={"choices": [{"message": {"content": "answer"}}]})
+        with patch.dict("os.environ", {"BASE_URL": "http://proxy.test/v1", "LLM_API_KEY": "test-key",
+                                    "LLM_MODEL": "qwen", "MAX_TOKENS": ""}, clear=True):
+            self.assertEqual(generate([{"role": "user", "content": "Hi"}],
+                                      transport=httpx.MockTransport(handler),
+                                      deadline=time.monotonic() + 120), "answer")
+        self.assertEqual(str(captured[0].url), "http://proxy.test/v1/chat/completions")
+        self.assertEqual(captured[0].extensions["timeout"]["read"], 90.0)
+        self.assertEqual(json.loads(captured[0].content)["max_tokens"], 2048)
+
 
 class ApiTests(unittest.TestCase):
     def setUp(self):
