@@ -24,7 +24,7 @@ from contracts import KnowledgeChunk, Retriever
 from chunking import CHUNKER_VERSION, MAX_SECTION_CHARS, OVERLAP_CHARS, chunk_documents
 from kb_loader import load_documents
 
-INDEX_VERSION = "bm25-ru-v1"
+INDEX_VERSION = "bm25-ru-v2"
 _LOG = logging.getLogger(__name__)
 _STOPWORDS = frozenset("""а без бы был была были было быть в вам вас ваш ваша ваши во вот все всего вы где да даже для до его ее если есть еще же за зачем здесь и из или им их к как какая какие какой какому ко когда кто ли либо мне может можно мы на над надо нам нас наш наша не него нее нет ни но о об он она они оно от по под после почему при про с со так также такой там то того тоже только том тут ты у уже чем через что чтобы это этой этот эту я меня мой очень пожалуйста здравствуйте привет спасибо пользователь ассистент хочу хотим нужно нужен нужна нужны стоит вообще сможете можете сколько""".split())
 # shortcut: noun/adjective endings only; use a full stemmer if measured recall needs it.
@@ -66,6 +66,7 @@ def tokenize(text: str, *, expand: bool = True) -> list[str]:
                     break
         if expand:
             word = _ALIASES.get(word, word)
+            word = re.sub(r"^(?:одно|двух|трех|четырех|много)тарифн?$", "тариф", word)
         tokens.append(word)
     return tokens
 
@@ -85,7 +86,7 @@ class BM25Retriever:
             chunk.source: chunk for chunk in chunks
             if chunk.source.startswith("20-products/")
             and not chunk.source.endswith("20-portfolio.md")
-            and chunk.title.endswith(" / Что это")
+            and (chunk.title.endswith(" / Что это") or " / " not in chunk.title)
         }
         self._evidence_products = {c.chunk_id: c.source for c in chunks if c.source in self._overviews}
         for chunk in chunks:
@@ -110,6 +111,41 @@ class BM25Retriever:
         self._postings = {key: tuple(values) for key, values in postings.items()}
         self._idf = {key: math.log1p((len(chunks) - len(values) + 0.5) / (len(values) + 0.5))
                      for key, values in postings.items()}
+
+        char_counts = [self._char_terms(c.text) for c in chunks]
+        frequency = Counter(term for counts in char_counts for term in counts)
+        self._char_idf = {term: math.log((len(chunks) + 1) / (count + 1)) + 1
+                          for term, count in frequency.items()}
+        self._char_postings = defaultdict(list)
+        for index, counts in enumerate(char_counts):
+            weights = {term: (1 + math.log(count)) * self._char_idf[term]
+                       for term, count in counts.items()}
+            norm = math.sqrt(sum(w * w for w in weights.values())) or 1
+            for term, weight in weights.items():
+                self._char_postings[term].append((index, weight / norm))
+
+    @staticmethod
+    def _char_terms(text):
+        terms = Counter()
+        for word in tokenize(text):
+            word = "^" + word + "$"
+            for size in (3, 4):
+                terms.update(word[i:i + size] for i in range(len(word) - size + 1))
+        return terms
+
+    def _character_candidates(self, query, top_k):
+        scores = defaultdict(float)
+        for term, count in self._char_terms(query).items():
+            weight = (1 + math.log(count)) * self._char_idf.get(term, 0)
+            for index, value in self._char_postings.get(term, ()):
+                scores[index] += weight * value
+        character = sorted(scores, key=lambda i: (-scores[i], self._chunks[i].chunk_id))[:20]
+        combined = defaultdict(float)
+        for sequence in (self.retrieve(query, max(20, top_k)), [self._chunks[i] for i in character]):
+            for rank, chunk in enumerate(sequence, 1):
+                combined[chunk.chunk_id] += 1 / (60 + rank)
+        by_id = {c.chunk_id: c for c in self._chunks}
+        return [by_id[key] for key in sorted(combined, key=lambda k: (-combined[k], k))[:top_k]]
 
     def retrieve(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
         _validate_query(query, top_k)
@@ -156,9 +192,10 @@ class BM25Retriever:
         ranked = self.retrieve_with_overviews(query, top_k)
         if not ranked:
             return ranked
-        counts = Counter(c.source for c in ranked[:top_k])
+        counts = Counter(self._evidence_products.get(c.chunk_id, c.source) for c in ranked[:top_k])
+        leading_source = self._evidence_products.get(ranked[0].chunk_id, ranked[0].source)
         products = [source for source, count in counts.items()
-                    if source in self._overviews and (count >= 2 or source == ranked[0].source)][:2]
+                    if source in self._overviews and (count >= 2 or source == leading_source)][:2]
         candidates = {source: self.retrieve(
             query + " " + self._overviews[source].title.split(" / ")[0], top_k=len(self._chunks))
             for source in products}
@@ -173,11 +210,14 @@ class BM25Retriever:
             roles.insert(0, ("inputs", r"что нужно от клиента"))
         for role, pattern in roles:
             for source in products:
+                product_inputs = any(c.source == source and re.search(
+                    r"что нужно от клиента", c.title.rsplit(" / ", 1)[-1], re.I)
+                    for c in self._chunks)
                 def relevant(chunk):
                     if self._evidence_products.get(chunk.chunk_id) != source:
                         return False
                     if chunk.source.startswith("00-reference/"):
-                        return ((role == "inputs" and "Какие сведения" in chunk.title)
+                        return ((role == "inputs" and not product_inputs and "Какие сведения" in chunk.title)
                                 or (role == "limits" and "Область применения" in chunk.title))
                     return bool(re.search(pattern, chunk.title.rsplit(" / ", 1)[-1], re.I))
                 if any(relevant(c) for c in ranked + added):
@@ -189,8 +229,26 @@ class BM25Retriever:
                         remaining -= len(chunk.text)
                         break
                 if len(added) == 3:
-                    return ranked + added
-        return ranked + added
+                    break
+            if len(added) == 3:
+                break
+        result = ranked + added
+        present = {c.chunk_id for c in result}
+        # Keep lexical evidence intact; the second channel only fills gaps.
+        extra = []
+        budget = 1800
+        allowed_sources = set(products) or {c.source for c in ranked[:top_k]}
+        exclusions = [c for c in self._chunks if c.source in products
+                      and re.match(r"не подходит", c.title.rsplit(" / ", 1)[-1], re.I)]
+        for chunk in exclusions + self._character_candidates(query, top_k):
+            if (chunk.source in allowed_sources and chunk.chunk_id not in present
+                    and len(chunk.text) <= budget):
+                extra.append(replace(chunk, score=0.0))
+                present.add(chunk.chunk_id)
+                budget -= len(chunk.text)
+                if len(extra) == 2:
+                    break
+        return result + extra
 
 
 class EmbeddingError(RuntimeError):

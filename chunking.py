@@ -6,7 +6,7 @@ from contracts import KnowledgeChunk, KnowledgeDocument
 import hashlib
 import re
 
-CHUNKER_VERSION = "markdown-sections-v1"
+CHUNKER_VERSION = "markdown-sections-v2"
 # Soft bound: indivisible tables/paragraphs may be larger. Never truncate facts.
 MAX_SECTION_CHARS = 5000
 OVERLAP_CHARS = 500
@@ -28,6 +28,11 @@ def _sections(document: KnowledgeDocument):
                 fence = None
             body.append(line)
             continue
+        # Pandoc exports may glue an escaped heading to the preceding sentence.
+        glued = re.match(r"^(.*[.!?])\s+\\(#{2,6}\s+\S.*)$", line) if fence is None else None
+        if glued:
+            body.append(glued.group(1))
+            line = glued.group(2)
         match = _HEADING.match(line) if fence is None else None
         if match:
             if any(part.strip() for part in body):

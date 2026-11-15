@@ -61,7 +61,7 @@ class RunDiagnostics:
             "evidence_completion_configured": os.getenv("EVIDENCE_COMPLETION", "1") != "0",
             "answer_review_configured": os.getenv("ANSWER_REVIEW", "0") == "1",
             "client_facts_configured": os.getenv("CLIENT_FACTS", "1") == "1",
-            "answer_completeness_configured": os.getenv("ANSWER_COMPLETENESS", "1") == "1",
+            "answer_completeness_configured": os.getenv("ANSWER_COMPLETENESS", "0") == "1",
             "retrieval_mode": mode if mode in ("bm25", "embeddings", "hybrid") else "unknown",
             "counters": {**{name: self._counts[name] for name in names},
                          **{name: value for name, value in self._counts.items() if name not in names}},

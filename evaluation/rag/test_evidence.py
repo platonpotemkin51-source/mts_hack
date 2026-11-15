@@ -35,6 +35,39 @@ def model(messages):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_character_channel_recovers_a_misspelling_without_enabling_unmatched_answers(self):
+        chunks = [KnowledgeChunk('photo', '20-products/photo.md', 'Макет / Что это',
+                                 'Фотография фотографии распознавание.'),
+                  KnowledgeChunk('other', '20-products/other.md', 'Другой макет / Что это',
+                                 'Бумажная лодка плавает.')]
+        r = BM25Retriever(chunks)
+        self.assertEqual(r.retrieve('фотогрфия'), [])
+        self.assertEqual(r._character_candidates('фотогрфия', 1)[0].chunk_id, 'photo')
+        self.assertEqual(r.retrieve_with_evidence('фотогрфия'), [])
+
+    def test_product_requirements_are_not_replaced_by_a_short_reference(self):
+        source = '20-products/paper.md'
+        chunks = [KnowledgeChunk('intro', source, 'Бумажный макет', 'Макет сканирует листы.'),
+                  KnowledgeChunk('answer', source, 'Бумажный макет / Возможности', 'Сканирование листов.'),
+                  KnowledgeChunk('inputs', source, 'Бумажный макет / Что нужно от клиента',
+                                 'Для макета нужен архив и раздельные поля за 37 дней.'),
+                  KnowledgeChunk('reference', '00-reference/inputs.md',
+                                 'Какие сведения нужны / Для бумажного макета', 'Для оценки сканирования нужны данные.')]
+        r = BM25Retriever(chunks)
+        found = r.retrieve_with_evidence('Сканирование: каких данных хватит для оценки?', 2)
+        self.assertTrue(any(c.chunk_id == 'inputs' for c in found))
+        self.assertTrue(any('раздельные поля за 37 дней' in c.text for c in found))
+
+    def test_ideal_profile_does_not_hide_a_separate_disqualifying_condition(self):
+        chunks = corpus() + [KnowledgeChunk('excluded', '20-products/paper.md',
+                                           'Бумажный макет / Не подходит, если',
+                                           'Мокрая бумага не подходит для сканирования.')]
+        r = BM25Retriever(chunks)
+        before = r.retrieve_with_overviews('Сканирование листов', 1)
+        after = r.retrieve_with_evidence('Сканирование листов', 1)
+        self.assertEqual(after[:len(before)], before)
+        self.assertIn('excluded', {c.chunk_id for c in after})
+
     def test_missing_inputs_limits_and_scope_added_without_replacing_hits(self):
         r = BM25Retriever(corpus())
         before = r.retrieve_with_overviews("Сканирование: какие данные нужны для оценки?", 1)

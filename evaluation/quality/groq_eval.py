@@ -17,7 +17,7 @@ import httpx
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from chunking import chunk_documents
-from consultant import Consultant, SYSTEM_RULES, COMPLETENESS_RULES
+from consultant import Consultant, SYSTEM_RULES, COMPLETENESS_RULES, COMPETITION_RULES
 from contracts import ChatMessage, ClientBrief
 from evaluation.quality.synthetic_cases import CASES, DOCUMENTS
 from llm_client import ModelUnavailable, generate
@@ -65,7 +65,7 @@ def checks(answer, case):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--split", choices=("pilot", "dev", "holdout"), default="pilot")
-    parser.add_argument("--variants", nargs="+", choices=("baseline", "review", "concise", "complete", "state", "complete_state"), default=["baseline", "review"])
+    parser.add_argument("--variants", nargs="+", choices=("baseline", "review", "concise", "complete", "state", "complete_state", "candidate"), default=["baseline", "candidate"])
     parser.add_argument("--label", required=True)
     parser.add_argument("--max-calls", type=int, default=24)
     parser.add_argument("--replay-from", type=Path, help="Reuse saved baseline raw answers on this exact dataset/model")
@@ -102,7 +102,8 @@ def main():
         saved = {r["id"]: r["traces"] for r in prior["results"]
                  if r["variant"] == "baseline" and "error" not in r}
     report["replay_from"] = str(args.replay_from) if args.replay_from else None
-    report["experimental_prompts"] = {"complete": COMPLETENESS_RULES, "concise": CONCISE_RULES}
+    report["experimental_prompts"] = {"complete": COMPLETENESS_RULES, "concise": CONCISE_RULES,
+                                      "candidate": COMPETITION_RULES}
     os.environ.update(TEMPERATURE="0", MAX_TOKENS="2048", TOP_K="6", EVIDENCE_COMPLETION="1")
     retriever = BM25Retriever(chunk_documents(DOCUMENTS))
     frozen = types.ModuleType("frozen_consultant")
@@ -116,7 +117,7 @@ def main():
         first_responses = []
         for variant in args.variants:
             os.environ["ANSWER_REVIEW"] = "1" if variant == "review" else "0"
-            os.environ["CLIENT_FACTS"] = "1" if variant in ("state", "complete_state") else "0"
+            os.environ["CLIENT_FACTS"] = "1" if variant in ("state", "complete_state", "candidate") else "0"
             os.environ["ANSWER_COMPLETENESS"] = "1" if variant in ("complete", "complete_state") else "0"
             traces, events, consumed, quota, pacing = [], Counter(), 0, {}, 0.0
             def event(name, value=None):

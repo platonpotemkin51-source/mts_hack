@@ -142,6 +142,16 @@ class RAGTests(unittest.TestCase):
         self.assertIn("Родитель / Дочерний", chunks[0].title)
         self.assertIn("```md\n# Not a heading\n```", chunks[0].text)
 
+    def test_glued_exported_heading_separates_requirements_without_losing_text(self):
+        text = ('# Вымышленный каталог\n\n## Результат\n\nПилот завершён. \\## Что нужно от клиента\n\n'
+                'Нужен архив за 37 дней.\n\n```md\nПример. \\## Не заголовок\n```')
+        chunks = chunk_documents([document(text)])
+        self.assertEqual(len(chunks), 2)
+        self.assertIn('Пилот завершён.', chunks[0].text)
+        self.assertTrue(chunks[1].title.endswith('Что нужно от клиента'))
+        self.assertIn('архив за 37 дней', chunks[1].text)
+        self.assertIn('Пример. \\## Не заголовок', chunks[1].text)
+
     def test_oversized_prose_has_overlap_and_no_missing_paragraphs(self):
         blocks = [f"BLOCK{i} " + "a" * 25 for i in range(12)]
         with patch.object(chunking, "MAX_SECTION_CHARS", 100):
@@ -169,6 +179,13 @@ class RAGTests(unittest.TestCase):
         self.assertEqual(tokenize("1 000 000 кВт·ч 0,5%"), tokenize("1000000 kWh 0.5 процент"))
         self.assertNotEqual(tokenize("750 кВт"), tokenize("750 кВт·ч"))
         self.assertNotEqual(tokenize("20 МВт"), tokenize("20 кВт"))
+
+    def test_compound_tariff_words_find_the_documented_fields(self):
+        target = document('# Вымышленный каталог\n\n## Поля\nМноготарифные показания с фотографии.')
+        r = BM25Retriever(chunk_documents([target]))
+        self.assertTrue(r.retrieve('двухтарифные показания'))
+        for word in ('однотарифные', 'двухтарифные', 'трёхтарифные', 'многотарифные'):
+            self.assertEqual(tokenize(word), tokenize('тариф'))
 
     def test_search_ranking_contract_empty_and_no_match(self):
         retriever = build_retriever(self.kb)
