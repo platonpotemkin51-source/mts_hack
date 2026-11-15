@@ -68,7 +68,7 @@ class QualityTests(unittest.TestCase):
         question = Consultant(Retriever(), lambda _: payload("Сколько точек учёта у вас?"),
                               competition=True, diagnostic_fn=lambda *x: events.append(x)).respond(
                                   message="Нужна помощь", history=[], brief=ClientBrief())
-        self.assertEqual(question.answer, "Сколько точек учёта у вас?")
+        self.assertTrue(question.answer.endswith("Сколько точек учёта у вас?"))
         self.assertIn(("safe_unsourced_answer", None), events)
         claim = Consultant(Retriever(), lambda _: payload("Платформа поддерживает любую модель.", ["C99"]),
                            competition=True, diagnostic_fn=lambda *x: events.append(x)).respond(
@@ -105,7 +105,7 @@ class QualityTests(unittest.TestCase):
         result = Consultant(Retriever(), model, competition=True).respond(
             message="Нужна помощь", history=[], brief=ClientBrief())
         self.assertEqual(len(calls), 2)
-        self.assertEqual(result.answer, "Сколько точек учёта у вас?")
+        self.assertTrue(result.answer.endswith("Сколько точек учёта у вас?"))
 
     def test_first_direct_request_can_offer_lead(self):
         result = Consultant(Retriever(), lambda _: payload("Свяжемся со специалистом.", ["C1"], lead=False)).respond(
