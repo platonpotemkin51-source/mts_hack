@@ -211,13 +211,14 @@ class Store:
     def session_detail(self, session_id: str) -> dict:
         with self.connect() as db:
             row = self._session(db, session_id)
-            lead = db.execute("SELECT lead_id FROM leads WHERE session_id=?", (session_id,)).fetchone()
+            lead = db.execute("SELECT lead_id,session_id,summary,created_at FROM leads WHERE session_id=?", (session_id,)).fetchone()
             messages = [dict(item) for item in db.execute(
                 "SELECT role,content,created_at FROM messages WHERE session_id=? ORDER BY id", (session_id,))]
             return {"session_id": row["session_id"], "status": row["status"],
                     "created_at": row["created_at"], "updated_at": row["updated_at"],
                     "messages": messages, "brief": json.loads(row["brief_json"]),
-                    "lead_id": lead["lead_id"] if lead else None}
+                    "lead_id": lead["lead_id"] if lead else None,
+                    "lead": dict(lead) if lead else None}
 
     def create_lead(self, session_id: str, full_name: str, phone: str,
                     company: str) -> dict:
@@ -228,21 +229,23 @@ class Store:
                 raise StoreError("session_closed", 409, "Начните новый диалог.")
             if db.execute("SELECT 1 FROM leads WHERE session_id=?", (session_id,)).fetchone():
                 raise StoreError("lead_exists", 409, "Заявка уже сохранена.")
+            if db.execute("SELECT 1 FROM chat_requests WHERE session_id=? AND state='pending' LIMIT 1",
+                          (session_id,)).fetchone():
+                raise StoreError("request_pending", 409, "Дождитесь ответа консультанта перед сохранением заявки.")
             brief = json.loads(row["brief_json"])
-            user_messages = [item[0] for item in db.execute(
-                "SELECT content FROM messages WHERE session_id=? AND role='user' ORDER BY id", (session_id,))]
             summary_parts = ["Клиент: " + full_name, "Компания: " + company,
                              "Телефон: " + phone]
+            if brief.get("manager_summary"):
+                summary_parts.append("Обращение: " + brief["manager_summary"])
             for label, value in (("Объект", brief.get("object")), ("Задача", brief.get("problem"))):
-                if value:
+                if value and value.casefold() not in (brief.get("manager_summary") or "").casefold():
                     summary_parts.append(label + ": " + value)
             for label, key in (("Параметры", "known_parameters"),
                                ("Обсуждались решения", "recommended_products"),
                                ("Не уточнено", "missing_fields")):
                 if brief.get(key):
                     summary_parts.append(label + ": " + "; ".join(brief[key]))
-            if user_messages:
-                summary_parts.append("Реплики клиента: " + " | ".join(user_messages[-8:]))
+            summary_parts.append("Следующий шаг: специалисту уточнить условия и применимость решения к объекту.")
             summary = "\n".join(summary_parts)[:5000]
             lead_id, stamp = uuid.uuid4().hex, now()
             db.execute("INSERT INTO leads VALUES (?,?,?,?,?,?,?)",

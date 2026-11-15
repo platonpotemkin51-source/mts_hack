@@ -13,6 +13,7 @@ export interface ClientBrief {
   known_parameters: string[];
   recommended_products: string[];
   missing_fields: string[];
+  manager_summary?: string | null;
 }
 
 export interface Timings {
@@ -52,6 +53,7 @@ export interface SessionDetail extends SessionSummary {
   }>;
   brief: ClientBrief;
   lead_id: string | null;
+  lead?: LeadResponse | null;
 }
 
 export interface LeadRequest {

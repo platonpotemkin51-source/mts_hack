@@ -14,7 +14,7 @@ const blank = {
 const now = "2026-11-14T12:00:00Z";
 async function backend(
   page: Page,
-  options: { delay?: number; status?: number } = {},
+  options: { delay?: number; status?: number; gate?: Promise<void> } = {},
 ) {
   const calls: Array<{
     session_id: string | null;
@@ -30,6 +30,7 @@ async function backend(
       if (path === "/api/chat") {
         const body = route.request().postDataJSON();
         calls.push(body);
+        if (options.gate) await options.gate;
         if (options.delay)
           await new Promise((resolve) => setTimeout(resolve, options.delay));
         if (options.status)
@@ -126,6 +127,24 @@ const send = async (page: Page, text = "Нужен учёт на складе") 
   await page.getByLabel("Отправить сообщение").click();
 };
 
+test("saved manager summary opens and downloads from archive", async ({ page }) => {
+  await backend(page);
+  const summary = "Клиент: Тестовый Клиент\nТелефон: +70000000000\nОбращение: склад, 12 приборов.";
+  await page.route("**/api/sessions/archived", route => route.fulfill({ json: {
+    session_id: "archived", status: "closed", created_at: now, updated_at: now,
+    messages: [], brief: blank, lead_id: "saved-lead",
+    lead: { lead_id: "saved-lead", session_id: "archived", summary, created_at: now },
+  }}));
+  await page.getByRole("button", { name: "Архив диалогов" }).click();
+  await page.getByRole("button", { name: /Диалог 1/ }).click();
+  await expect(page.getByLabel("Заявка менеджеру")).toContainText("12 приборов");
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Скачать заявку" }).click();
+  const download = await downloaded;
+  expect(download.suggestedFilename()).toBe("energytool-saved-lead.txt");
+  expect(readFileSync((await download.path())!, "utf8")).toBe(summary);
+});
+
 test("contract, keyboard, duplicate guard, plain text, debug and server brief", async ({
   page,
 }) => {
@@ -184,12 +203,15 @@ test("refusal, later consent and server lead summary", async ({ page }) => {
 test("new dialogue during generation discards old answer and closes old ID", async ({
   page,
 }) => {
-  const { calls, closed } = await backend(page, { delay: 700 });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const { calls, closed } = await backend(page, { gate });
   await send(page);
   await expect(page.getByText("Консультант готовит ответ…")).toBeVisible();
   await page.getByRole("button", { name: "Новый диалог" }).click();
   await expect.poll(() => closed.length).toBe(1);
   expect(closed[0]).toMatch(/^\/api\/requests\/.+\/close$/);
+  release();
   await expect(page.getByText("Ответ 1:", { exact: false })).toHaveCount(0);
   await expect(
     page.getByLabel("Карточка клиента").getByText("Пока не указан"),

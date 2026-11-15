@@ -24,10 +24,31 @@ SYSTEM_RULES = """Ты — консультант МТС Energytool. Отвеч�
 Не консультируй по технической документации и пошаговой настройке приборов/систем учёта.
 Учитывай исправления клиента: новые параметры заменяют старые. Не спрашивай повторно
 известное. Сначала ответ по существу, затем максимум один важный вопрос.
+Когда спрашивают, какие данные нужны для оценки, перечисляй только ещё неизвестные
+данные. Например, если клиент уже указал склад и 10 приборов, не проси тип объекта
+и количество повторно. Если база требует тип приборов, количество и способ сбора,
+осталось уточнить модели приборов и способ сбора. Не добавляй примеры способов,
+которых нет в базе. Согласие на заявку не требует сначала собрать все параметры:
+неизвестное можно передать специалисту как вопросы для уточнения.
 Отказ от контактов не прекращает консультацию и не повод просить телефон снова.
 Верни ТОЛЬКО JSON: {"answer": str, "brief": {"object": str|null,
 "problem": str|null, "known_parameters": [str], "recommended_products": [str],
-"missing_fields": [str]}, "lead_offer": bool, "used_chunk_ids": [str]}.
+"missing_fields": [str]}, "manager_evidence": [str], "lead_offer": bool, "used_chunk_ids": [str]}.
+manager_evidence — до трёх коротких ДОСЛОВНЫХ фрагментов реплик клиента о его
+основной задаче, актуальных параметрах и имеющемся оборудовании. Каждый фрагмент
+должен точно встречаться в одной реплике клиента. Выбирай существенное, до 220 символов
+на фрагмент. После исправления числа или смены объекта исключи устаревшие сведения.
+Приоритет цитат: тип объекта, основная задача, актуальные параметры. Обязательно
+ищи их и в истории, если текущая реплика содержит только контакты или просьбу о звонке.
+Просьба о звонке не заменяет сведения об объекте. При изменении количества выбирай
+исправление из текущей реплики. Не добавляй в answer примеры технологий, протоколов
+или возможностей, которых нет в knowledge_chunks.
+Не включай контакты, общие вопросы о других продуктах и неподтверждённые обещания.
+Если фактическая задача не описана, верни пустой список. Остальные поля brief
+обновляй по актуальной задаче, без старых параметров.
+При запросе специалиста предложи оставить контакты сразу. Если контакты уже даны,
+кратко подтверди полученные сведения и перечисли суть обращения для передачи.
+Не утверждай, что заявка отправлена или менеджер уже назначен, без подтверждения системы.
 В used_chunk_ids включай только короткие ID C1, C2 и т. д. реально использованных фрагментов. Если фрагменты
 не подходят, оставь список пустым и не утверждай продуктовых фактов. Обычно до 150 слов.
 Если нужно только уточнить объект, задачу или количество точек учёта, задай один
@@ -195,6 +216,12 @@ def _declined_contacts(history: list[ChatMessage], message: str) -> bool:
         if item.role != "user":
             continue
         content = item.content.lower()
+        if re.search(r"\bне\s+(?:звоните|перезванивайте|связывайтесь|звонить|перезванивать|связываться)\b|"
+                     r"\bбез\s+(?:звонков|заявки|связи)\b", content):
+            return True
+        if re.search(r"\b(?:не\s+хочу|не\s+буду|не\s+готов|не\s+нужно|не\s+надо|отказываюсь)\b"
+                     r".{0,45}\b(?:заявк[а-я]*|связ[а-я]*|звон[а-я]*|перезвон[а-я]*)", content):
+            return True
         if re.search(r"\bбез\s+(?:личных\s+)?контакт", content):
             return True
         if re.search(r"\b(?:телефон|номер|контакт)[а-я]*\b", content) and re.search(
@@ -281,6 +308,26 @@ class Consultant:
         generation_ms = round((time.monotonic() - generation_started) * 1000, 2)
         if parsed.get("auxiliary_error"):
             self._event("auxiliary_error")
+        user_texts = [*(item.content for item in history if item.role == "user"), message]
+        reset_pattern = (r"\b(?:исправляю|исправление|уточню|поправка|ошибся|ошиблась|"
+                         r"другой объект|новый объект|другая тема)\b|\bне\s+\d+.{0,25}\bа\s+\d+")
+        reset_indices = [i for i, text in enumerate(user_texts) if re.search(reset_pattern, text, re.I)]
+        evidence_texts = user_texts[reset_indices[-1]:] if reset_indices else user_texts
+        evidence = parsed.get("manager_evidence")
+        excerpts = []
+        if isinstance(evidence, list):
+            for excerpt in evidence[:3]:
+                if (isinstance(excerpt, str) and excerpt.strip() and len(excerpt) <= 220
+                        and any(excerpt in text for text in evidence_texts) and excerpt not in excerpts
+                        and not re.search(r"\+?\d[\d ()-]{8,}\d", excerpt)):
+                    excerpts.append(excerpt)
+        if reset_indices:
+            correction = evidence_texts[0]
+            if len(correction) <= 220 and not re.search(r"\+?\d[\d ()-]{8,}\d", correction):
+                excerpts = [correction, *(text for text in excerpts if text not in correction)][:3]
+        parsed["brief"].manager_summary = (
+            "Клиент сообщил: " + " · ".join("«" + text + "»" for text in excerpts)
+            if excerpts else None)
         used = set()
         valid_ids = {c.chunk_id for c in chunks}
         for identifier in parsed["used_chunk_ids"]:
@@ -292,7 +339,18 @@ class Consultant:
         sources = [chunk for chunk in chunks if chunk.chunk_id in used]
         if not sources:
             parsed["brief"].recommended_products = []
-            safe_answer = _safe_unsourced_answer(parsed["answer"])
+            requested = _explicit_lead_request(message)
+            has_phone = any(re.search(r"(?<!\d)\+?\d[\d ()-]{8,}\d(?!\d)", text)
+                            for text in [message, *(item.content for item in history if item.role == "user")])
+            if has_phone and (requested or (parsed["lead_offer"] and not _declined_contacts(history, message))):
+                safe_answer = ("Контактный номер указан в диалоге. Для заявки нужны ФИО, компания и согласие "
+                               "на связь; уже указанные сведения повторять не требуется. "
+                               "Специалисту потребуется уточнить условия для вашего объекта.")
+            elif requested:
+                safe_answer = ("Для связи со специалистом укажите ФИО, телефон и компанию "
+                               "и подтвердите согласие на связь.")
+            else:
+                safe_answer = _safe_unsourced_answer(parsed["answer"])
             if safe_answer:
                 answer = safe_answer
                 self._event("safe_unsourced_answer")
@@ -305,6 +363,10 @@ class Consultant:
         user_turns = sum(item.role == "user" for item in history) + 1
         requested = _explicit_lead_request(message)
         lead_offer = bool(requested or (parsed["lead_offer"] and user_turns >= 2 and not declined))
+        if self.competition and lead_offer and parsed["brief"].manager_summary:
+            handoff = "\n\nСуть обращения для специалиста: " + parsed["brief"].manager_summary
+            if len(answer) + len(handoff) <= 10_000:
+                answer += handoff
         return ConsultationResult(
             answer=answer, sources=sources, brief=parsed["brief"], lead_offer=lead_offer,
             timings=Timings(retrieval_ms, generation_ms,

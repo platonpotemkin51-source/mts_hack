@@ -42,6 +42,7 @@ class ClientBrief:
     known_parameters: list[str] = field(default_factory=list)
     recommended_products: list[str] = field(default_factory=list)
     missing_fields: list[str] = field(default_factory=list)
+    manager_summary: str | None = None
 
 
 @dataclass(frozen=True)

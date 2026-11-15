@@ -10,6 +10,16 @@ const sessions = ref<SessionSummary[]>([]),
 let controller: AbortController | undefined;
 let generation = 0;
 const formatDate = (value: string) => new Date(value).toLocaleString("ru-RU");
+function downloadLead() {
+  const lead = detail.value?.lead;
+  if (!lead) return;
+  const url = URL.createObjectURL(new Blob([lead.summary], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `energytool-${lead.lead_id}.txt`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 async function load(id?: string) {
   const token = ++generation;
   controller?.abort();
@@ -72,6 +82,11 @@ onUnmounted(() => {
       <div v-if="detail" class="archive-detail">
         <h2>Переписка <span class="badge">Только просмотр</span></h2>
         <p>{{ detail.lead_id ? "Заявка сохранена" : "Без заявки" }}</p>
+        <section v-if="detail.lead" aria-label="Заявка менеджеру">
+          <h3>Заявка менеджеру</h3>
+          <p style="white-space: pre-wrap">{{ detail.lead.summary }}</p>
+          <button @click="downloadLead">Скачать заявку</button>
+        </section>
         <p v-if="!detail.messages.length">Нет сообщений.</p>
         <article
           v-for="(message, index) in detail.messages"
