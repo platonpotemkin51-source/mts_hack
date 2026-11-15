@@ -59,6 +59,7 @@ class RunDiagnostics:
             "max_tokens_largest_retry": self._largest_token_budget or None,
             "max_workers": workers,
             "evidence_completion_configured": os.getenv("EVIDENCE_COMPLETION", "1") != "0",
+            "answer_review_configured": os.getenv("ANSWER_REVIEW", "0") == "1",
             "retrieval_mode": mode if mode in ("bm25", "embeddings", "hybrid") else "unknown",
             "counters": {**{name: self._counts[name] for name in names},
                          **{name: value for name, value in self._counts.items() if name not in names}},
