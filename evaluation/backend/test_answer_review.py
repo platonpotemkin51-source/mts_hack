@@ -55,6 +55,20 @@ class ReviewTests(unittest.TestCase):
             self.assertEqual(self.respond(core).answer, answer)
             self.assertEqual(len(calls), 1)
 
+    def test_citation_case_or_spacing_does_not_lose_grounded_answer(self):
+        for identifier in (" c1 ", " C1", " doc "):
+            core, calls = self.core([payload("Макет читает бумагу.", [identifier])])
+            result = self.respond(core)
+            self.assertEqual(result.answer, "Макет читает бумагу.")
+            self.assertEqual(result.sources[0].chunk_id, "doc")
+            self.assertEqual(len(calls), 1)
+
+    def test_partial_or_invented_citation_does_not_match(self):
+        core, calls = self.core([payload("Макет бесплатен.", ["C1 other"]), ModelUnavailable("timeout")])
+        result = self.respond(core)
+        self.assertNotIn("бесплатен", result.answer)
+        self.assertFalse(result.sources)
+
     def test_explicit_guarantee_reviewed_even_with_existing_number(self):
         core, calls = self.core([payload("Гарантируем стоимость 250 руб."), payload("В описании указана стоимость тестового макета 250 руб.")])
         self.assertNotIn("Гарантируем", self.respond(core).answer)

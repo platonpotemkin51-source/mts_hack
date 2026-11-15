@@ -201,7 +201,7 @@ def _explicit_lead_request(message: str) -> bool:
 
 
 _TOPIC_CHANGE = re.compile(
-    r"\b(?:а теперь|теперь (?:другой|про)|другая тема|перейд[её]м|сменим тему|новый вопрос|другой объект|новый объект)\b", re.I)
+    r"\b(?:(?:а\s+)?теперь\s+(?:(?:расскажи\w*|поговорим)\s+)?(?:друг\w*|про|о)|другая тема|перейд[её]м|сменим тему|новый вопрос|другой объект|новый объект)\b", re.I)
 _CORRECTION = re.compile(r"\b(?:исправляю|исправление|уточню|поправка|ошибся|ошиблась|вместо)\b|\bне\s+\d+.{0,25}\bа\s+\d+", re.I)
 _QUANTITY = re.compile(r"(?P<number>\d{1,3}(?:[ \u00a0]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*(?P<unit>квт[·⋅*-]?ч|квт|мвт|сч[её]тчик\w*|прибор\w*|склад\w*|объект\w*)\b", re.I)
 
@@ -241,11 +241,15 @@ def _model_history(history: list[ChatMessage]) -> list[dict]:
 def _corrected_quantities(users: list[str]) -> dict:
     corrected = {}
     for text in users:
-        if _CORRECTION.search(text):
+        if _is_correction(text):
             text = re.sub(r"не\s+\d+\s*((?:сч[её]тчик|прибор)\w*)\s*[,—-]?\s*а\s+(\d+)",
                           r"\2 \1", text, flags=re.I)
             corrected.update(_quantity_key(m) for m in _QUANTITY.finditer(text))
     return corrected
+
+
+def _is_correction(text: str) -> bool:
+    return bool(_CORRECTION.search(text) or (re.search(r"\b(?:теперь|стало)\b", text, re.I) and _QUANTITY.search(text)))
 
 
 def _search_query(message: str, history: list[ChatMessage], brief: ClientBrief) -> str:
@@ -282,12 +286,17 @@ def _numbers(text: str) -> set[Decimal]:
         r"\d{1,3}(?:[ \u00a0]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?", text)}
 
 
+def _resolve_source(identifier: str, aliases: dict) -> str:
+    candidate = identifier.strip()
+    return aliases.get(candidate.upper(), candidate)
+
+
 def _review_reason(parsed: dict, aliases: dict, chunks, client_text: str) -> str | None:
     if not chunks:
         return None
     answer = parsed["answer"]
-    valid = set(aliases) | set(aliases.values())
-    if not any(identifier in valid for identifier in parsed["used_chunk_ids"]):
+    valid = set(aliases.values())
+    if not any(_resolve_source(identifier, aliases) in valid for identifier in parsed["used_chunk_ids"]):
         return "missing_sources" if _safe_unsourced_answer(answer, client_text=client_text) is None else None
     if _numbers(answer) - _numbers(client_text + "\n" + "\n".join(c.text for c in chunks)):
         return "new_numbers"
@@ -434,8 +443,8 @@ class Consultant:
                     {"role": "user", "content": json.dumps({**supplied, "draft": parsed["answer"]}, ensure_ascii=False)},
                 ])
                 reviewed = _parse_model_answer(raw_review, current_brief=brief, competition=True)
-                valid = set(aliases) | set(aliases.values())
-                if (not any(identifier in valid for identifier in reviewed["used_chunk_ids"])
+                valid = set(aliases.values())
+                if (not any(_resolve_source(identifier, aliases) in valid for identifier in reviewed["used_chunk_ids"])
                         and _safe_unsourced_answer(reviewed["answer"], client_text=client_text) is None):
                     raise InvalidModelAnswer("Review lacks verified sources")
                 parsed["answer"] = reviewed["answer"]
@@ -446,9 +455,7 @@ class Consultant:
                 self._event("answer_review_failed")
             generation_ms += round((time.monotonic() - review_started) * 1000, 2)
         user_texts = [*(item.content for item in history if item.role == "user"), message]
-        reset_pattern = (r"\b(?:исправляю|исправление|уточню|поправка|ошибся|ошиблась|"
-                         r"другой объект|новый объект|другая тема)\b|\bне\s+\d+.{0,25}\bа\s+\d+")
-        reset_indices = [i for i, text in enumerate(user_texts) if re.search(reset_pattern, text, re.I)]
+        reset_indices = [i for i, text in enumerate(user_texts) if _is_correction(text) or _TOPIC_CHANGE.search(text)]
         evidence_texts = user_texts[reset_indices[-1]:] if reset_indices else user_texts
         corrected = _corrected_quantities(_active_users(history, message))
         # A count correction does not erase the client's unchanged goal/object.
@@ -474,7 +481,7 @@ class Consultant:
         used = set()
         valid_ids = {c.chunk_id for c in chunks}
         for identifier in parsed["used_chunk_ids"]:
-            resolved = aliases.get(identifier, identifier)
+            resolved = _resolve_source(identifier, aliases)
             if resolved not in valid_ids:
                 self._event("unknown_source")
             else:

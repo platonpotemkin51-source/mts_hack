@@ -86,6 +86,26 @@ class DialogueTests(unittest.TestCase):
         self.assertNotIn("оптовый", query)
         self.assertIn("солнечная", query)
 
+    def test_now_count_change_does_not_erase_goal_or_object(self):
+        history = [ChatMessage("user", "На складе 17 приборов, нужен учёт по арендаторам.")]
+        query = _search_query("А теперь стало 24 прибора.", history, ClientBrief())
+        self.assertIn("арендаторам", query)
+        self.assertIn("складе", query)
+        self.assertNotIn("17", query)
+
+    def test_now_follow_up_does_not_erase_unchanged_goal_from_summary(self):
+        raw = json.dumps({"answer": "Какую задачу вы хотите решить?", "used_chunk_ids": [],
+                          "lead_offer": False, "manager_evidence": ["Нужен учёт по арендаторам."]})
+        result = Consultant(EmptyRetriever(), lambda _: raw, competition=True).respond(
+            message="А теперь какое решение вы предложите?",
+            history=[ChatMessage("user", "Нужен учёт по арендаторам.")], brief=ClientBrief())
+        self.assertIn("арендаторам", result.brief.manager_summary)
+
+    def test_now_tell_me_about_other_product_still_switches_topic(self):
+        query = _search_query("А теперь расскажите про солнечные панели.",
+                              [ChatMessage("user", "Оптовый рынок для завода")], ClientBrief())
+        self.assertNotIn("Оптовый", query)
+
     def test_early_goal_is_kept_beyond_last_three_turns(self):
         history = [ChatMessage("user", "Нужен учёт по арендаторам бизнес-центра.")]
         history += [ChatMessage("user", f"Дополнение {i}") for i in range(5)]
