@@ -86,6 +86,14 @@ class OpeningTests(unittest.TestCase):
         with self.assertRaises(InvalidModelAnswer):
             _parse_model_answer(payload('Ответ.','arbitrary'),competition=True)
 
+    def test_first_turn_is_explicit_and_does_not_reset_on_topic_change(self):
+        for history, expected in (([], True),
+                                  ([ChatMessage('user', 'Добрый день')], False),
+                                  ([ChatMessage('user', 'Другая тема: солнечная станция')], False)):
+            result,calls=self.respond([payload('Какова ваша задача?')],history=history)
+            supplied=json.loads(calls[0][1]['content'])
+            self.assertEqual(supplied['is_first_turn'],expected)
+
     def test_internal_filenames_are_not_passed_as_answer_material(self):
         result,calls=self.respond([payload('Что именно хотите выяснить?')])
         supplied=json.loads(calls[0][1]['content'])
