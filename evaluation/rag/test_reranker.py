@@ -44,11 +44,16 @@ class RerankerTests(unittest.TestCase):
     def test_invalid_indices_and_short_or_malformed_results_are_errors(self):
         for value in (None,{}, {'results':[]},{'results':[{'index':True}]},
                       {'results':[{'index':-1}]},{'results':[{'index':99}]},
-                      {'results':[{'index':'0'}]},{'results':[{}]},
+                      {'results':[{'index':'1.5'}]},{'results':[{}]},
                       {'results':[{'index':0},{'index':0}]}):
             with self.subTest(value=value):
                 self.response=httpx.Response(200,json=value)
                 with self.assertRaises(RerankerError):OrganizerReranker().rerank('Вопрос',self.chunks[:3],1)
+
+    def test_numeric_string_indices_match_the_organizer_example(self):
+        self.response=httpx.Response(200,json={'results':[{'index':' 2 '},{'index':'0'}]})
+        result=OrganizerReranker().rerank('Вопрос',self.chunks[:3],2)
+        self.assertEqual([c.chunk_id for c in result],['2','0'])
 
     def test_failures_are_sanitized_and_do_not_retry_storm(self):
         for value in (httpx.Response(401,text='secret-placeholder PRIVATE'),httpx.Response(429),

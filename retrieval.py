@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import posixpath
 import re
 import tempfile
 import time
@@ -91,6 +92,14 @@ class BM25Retriever:
             and (chunk.title.endswith(" / Что это") or " / " not in chunk.title)
         }
         self._evidence_products = {c.chunk_id: c.source for c in chunks if c.source in self._overviews}
+        self._relationships = []
+        for chunk in chunks:
+            if chunk.source not in self._overviews or not re.search(r"дополня\w*|не\s+заменя\w*", chunk.text, re.I):
+                continue
+            for link in re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", chunk.text):
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(chunk.source), link.split("#", 1)[0]))
+                if target in self._overviews and target != chunk.source:
+                    self._relationships.append((chunk, target))
         for chunk in chunks:
             if not chunk.source.startswith("00-reference/"):
                 continue
@@ -280,7 +289,16 @@ class BM25Retriever:
                 budget -= len(chunk.text)
                 if len(extra) == 2:
                     break
-        return result + extra
+        result += extra
+        # A product overview does not explain how two selected products complement each other.
+        mixed_inputs = (re.search(r"фото|фотограф|снимк", query, re.I)
+                        and re.search(r"автомат|подключ|ручн|техник|обход", query, re.I))
+        for chunk, target in self._relationships if mixed_inputs else ():
+            if (chunk.source in products and target in products and chunk.chunk_id not in present
+                    and len(chunk.text) <= 1000):
+                result.append(replace(chunk, score=0.0))
+                break
+        return result
 
 
 class EmbeddingError(RuntimeError):
@@ -435,6 +453,7 @@ class OrganizerReranker:
             if not isinstance(entries, list) or len(entries) < count:
                 raise ValueError("Missing reranked results")
             indices = [entry["index"] for entry in entries]
+            indices = [int(i.strip()) if isinstance(i, str) and i.strip().isdecimal() else i for i in indices]
             if (any(isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(candidates)
                     for i in indices) or len(set(indices)) != len(indices)):
                 raise ValueError("Invalid reranked indices")
