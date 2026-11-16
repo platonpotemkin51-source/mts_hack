@@ -24,36 +24,36 @@ class DialogueTests(unittest.TestCase):
 
     def test_known_count_is_not_asked_again(self):
         result = _safe_unsourced_answer("Сколько приборов у вас?", client_text="У нас 17 приборов.")
-        self.assertEqual(result, "Какой у вас тип объекта?")
+        self.assertIsNone(result)
         result = _safe_unsourced_answer("Сколько приборов у вас?", client_text="На складе 17 приборов.")
-        self.assertEqual(result, "Как сейчас собираются показания?")
+        self.assertIsNone(result)
 
     def test_models_and_collection_are_not_rewritten_as_quantity(self):
         self.assertEqual(_safe_unsourced_answer("Какие модели приборов у вас?"),
-                         "Какие модели приборов у вас установлены?")
+                         "Какие модели приборов у вас?")
         self.assertEqual(_safe_unsourced_answer("Как собираются показания счётчиков?"),
-                         "Как сейчас собираются показания?")
+                         "Как собираются показания счётчиков?")
 
     def test_known_collection_and_object_are_not_repeated(self):
         facts = "У нас склад и 17 приборов. Собираем показания вручную."
-        self.assertEqual(_safe_unsourced_answer("Какой тип объекта?", client_text=facts),
-                         "В каком регионе находится объект?")
+        self.assertIsNone(_safe_unsourced_answer("Какой тип объекта?", client_text=facts))
 
     def test_unknown_count_is_still_asked(self):
         self.assertEqual(_safe_unsourced_answer("Сколько приборов у вас?", client_text="Количество пока не знаем."),
-                         "Сколько точек учёта у вас?")
+                         "Сколько приборов у вас?")
 
     def test_assistant_numbers_are_not_client_facts(self):
         raw = json.dumps({"answer": "Сколько приборов у вас?", "used_chunk_ids": [], "lead_offer": False})
         result = Consultant(EmptyRetriever(), lambda _: raw, competition=True).respond(
             message="Нужно обсудить учёт", history=[ChatMessage("assistant", "Возможно, у вас 17 приборов?")], brief=ClientBrief())
-        self.assertEqual(result.answer, "Сколько точек учёта у вас?")
+        self.assertEqual(result.answer, "Сколько приборов у вас?")
 
     def test_real_core_uses_user_history_for_safe_question(self):
         raw = json.dumps({"answer": "Сколько приборов у вас?", "used_chunk_ids": [], "lead_offer": False})
-        result = Consultant(EmptyRetriever(), lambda _: raw, competition=True).respond(
+        responses = iter([raw, json.dumps({"answer_kind": "clarification", "answer": "Какие модели приборов установлены?", "used_chunk_ids": [], "lead_offer": False})])
+        result = Consultant(EmptyRetriever(), lambda _: next(responses), competition=True).respond(
             message="Какие ещё сведения нужны?", history=[ChatMessage("user", "На складе 17 приборов.")], brief=ClientBrief())
-        self.assertEqual(result.answer, "Как сейчас собираются показания?")
+        self.assertEqual(result.answer, "Какие модели приборов установлены?")
 
     def test_correction_removes_old_count_from_history_and_brief_query(self):
         query = _search_query("Исправляю: 24 прибора.", [ChatMessage("user", "На складе 17 приборов, нужен учёт.")],
@@ -133,7 +133,7 @@ class DialogueTests(unittest.TestCase):
     def test_new_topic_can_ask_for_new_object_count(self):
         facts = "\n".join(_active_users([ChatMessage("user", "17 приборов на складе")], "Новый объект: офис"))
         self.assertEqual(_safe_unsourced_answer("Сколько приборов у вас?", client_text=facts),
-                         "Сколько точек учёта у вас?")
+                         "Сколько приборов у вас?")
 
     def test_count_correction_keeps_unchanged_goal_in_manager_summary(self):
         raw = json.dumps({"answer": "Какую задачу вы хотите решить?", "used_chunk_ids": [],

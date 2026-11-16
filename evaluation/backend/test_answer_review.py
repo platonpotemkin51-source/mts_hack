@@ -85,7 +85,8 @@ class ReviewTests(unittest.TestCase):
         for failure in (ModelUnavailable("timeout"), "{broken", payload("Произвольное обещание", ["C99"])):
             core, calls = self.core([payload("Гарантируем стоимость 250 руб."), failure])
             result = self.respond(core)
-            self.assertIn("250", result.answer)
+            self.assertNotIn("Гарантируем", result.answer)
+            self.assertFalse(result.sources)
             self.assertEqual(len(calls), 2)
 
     def test_failed_review_cannot_bypass_existing_unknown_source_guard(self):
@@ -99,7 +100,7 @@ class ReviewTests(unittest.TestCase):
                  "recommended_products": [], "missing_fields": []}
         core, calls = self.core([payload("Экономия 91%.", brief=brief),
                                   payload("Экономия не указана.", brief={**brief, "object": "завод"}, lead_offer=True)])
-        result = self.respond(core)
+        result = core.respond(message="У нас склад, задача — бумага.", history=[], brief=ClientBrief())
         self.assertEqual(result.brief.object, "склад")
         self.assertFalse(result.lead_offer)
 
@@ -110,11 +111,11 @@ class ReviewTests(unittest.TestCase):
             self.respond(core, message)
             self.assertEqual(len(calls), 1)
 
-    def test_review_can_be_disabled_for_a_control_run(self):
-        core, calls = self.core([payload("Экономия 91%.")])
+    def test_detected_unsupported_numbers_are_checked_even_with_legacy_flag_off(self):
+        core, calls = self.core([payload("Экономия 91%."), payload("Экономия не указана.")])
         with patch.dict("os.environ", {"ANSWER_REVIEW": "0"}):
-            self.assertIn("91", self.respond(core).answer)
-        self.assertEqual(len(calls), 1)
+            self.assertNotIn("91", self.respond(core).answer)
+        self.assertEqual(len(calls), 2)
 
     def test_units_or_decimal_formatting_do_not_act_as_automatic_rejection(self):
         parsed = {"answer": "Параметр 250,0.", "used_chunk_ids": ["C1"]}
