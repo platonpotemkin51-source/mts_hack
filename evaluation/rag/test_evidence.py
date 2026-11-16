@@ -35,6 +35,15 @@ def model(messages):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_short_resource_noun_inflections_find_the_same_fact(self):
+        chunks=[KnowledgeChunk('water','invented.md','Макет / Вода','Макет учитывает объём воды.'),
+                KnowledgeChunk('paper','paper.md','Бумага','Макет считает листы бумаги.')]
+        retriever=BM25Retriever(chunks)
+        for query in ('вода','воды','воду','воде','водой'):
+            with self.subTest(query=query):
+                self.assertEqual(retriever.retrieve(query,1)[0].chunk_id,'water')
+        self.assertEqual(retriever.retrieve('газ'),[])
+
     def test_character_channel_recovers_a_misspelling_without_enabling_unmatched_answers(self):
         chunks = [KnowledgeChunk('photo', '20-products/photo.md', 'Макет / Что это',
                                  'Фотография фотографии распознавание.'),
@@ -87,6 +96,25 @@ class EvidenceTests(unittest.TestCase):
         r = BM25Retriever(corpus())
         result = r.retrieve_with_evidence("сканирование проверка бумаги", 4)
         self.assertEqual(len(result), len({c.chunk_id for c in result}))
+
+    def test_two_products_keep_both_limits_even_when_inputs_and_scope_are_missing(self):
+        chunks=[]
+        ranked=[]
+        for key,name in [('paper','Бумажный макет'),('boat','Стеклянный корабль')]:
+            source='20-products/'+key+'.md'
+            for role,heading in [('intro','Что это'),('answer','Возможности'),
+                                 ('inputs','Что нужно от клиента'),('scope','Целевой диапазон'),
+                                 ('limit','Что мы не делаем')]:
+                chunk=KnowledgeChunk(key+'-'+role,source,name+' / '+heading,
+                                     name+' '+heading+' '+('Ограничение обязательно.' if role=='limit' else 'Условие.'))
+                chunks.append(chunk)
+                if role in {'intro','answer'}:ranked.append(chunk)
+        retriever=BM25Retriever(chunks)
+        with patch.object(retriever,'_character_candidates',return_value=[]):
+            found=retriever.retrieve_with_evidence('Какие данные нужны для оценки двух продуктов?',4,ranked=ranked)
+        self.assertEqual(found[:4],ranked)
+        self.assertEqual({c.chunk_id for c in found},{c.chunk_id for c in chunks})
+        self.assertLessEqual(sum(len(c.text) for c in found[4:]),4000)
 
     def test_empty_unrelated_and_validation(self):
         r = BM25Retriever(corpus())

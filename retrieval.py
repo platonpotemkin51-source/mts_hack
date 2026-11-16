@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import os
+import posixpath
 import re
 import tempfile
 import time
@@ -33,6 +34,7 @@ _ALIASES = {
     "электричеств": "электроэнерг", "крыш": "кровл",
     "фото": "фотограф", "снимок": "фотограф", "снимк": "фотограф",
     "симк": "сим", "sim": "сим", "орэм": "оптов", "askue": "аскуэ",
+    "вода": "вод", "воды": "вод", "воду": "вод", "воде": "вод", "водо": "вод",
 }
 
 
@@ -91,6 +93,14 @@ class BM25Retriever:
             and (chunk.title.endswith(" / Что это") or " / " not in chunk.title)
         }
         self._evidence_products = {c.chunk_id: c.source for c in chunks if c.source in self._overviews}
+        self._relationships = []
+        for chunk in chunks:
+            if chunk.source not in self._overviews or not re.search(r"дополня\w*|не\s+заменя\w*", chunk.text, re.I):
+                continue
+            for link in re.findall(r"\[[^\]]+\]\(([^)\s]+)\)", chunk.text):
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(chunk.source), link.split("#", 1)[0]))
+                if target in self._overviews and target != chunk.source:
+                    self._relationships.append((chunk, target))
         for chunk in chunks:
             if not chunk.source.startswith("00-reference/"):
                 continue
@@ -260,10 +270,6 @@ class BM25Retriever:
                         present.add(chunk.chunk_id)
                         remaining -= len(chunk.text)
                         break
-                if len(added) == 3:
-                    break
-            if len(added) == 3:
-                break
         result = ranked + added
         present = {c.chunk_id for c in result}
         # Keep lexical evidence intact; the second channel only fills gaps.
@@ -280,7 +286,16 @@ class BM25Retriever:
                 budget -= len(chunk.text)
                 if len(extra) == 2:
                     break
-        return result + extra
+        result += extra
+        # A product overview does not explain how two selected products complement each other.
+        mixed_inputs = (re.search(r"фото|фотограф|снимк", query, re.I)
+                        and re.search(r"автомат|подключ|ручн|техник|обход", query, re.I))
+        for chunk, target in self._relationships if mixed_inputs else ():
+            if (chunk.source in products and target in products and chunk.chunk_id not in present
+                    and len(chunk.text) <= 1000):
+                result.append(replace(chunk, score=0.0))
+                break
+        return result
 
 
 class EmbeddingError(RuntimeError):
@@ -404,12 +419,57 @@ class EmbeddingRetriever:
         return [replace(self._chunks[i], score=scores[i]) for i in ranked[:top_k]]
 
 
+class RerankerError(RuntimeError):
+    """Safe reranking error without provider bodies or source text."""
+
+
+class OrganizerReranker:
+    """Organizer sample contract: one bounded POST /rerank per nonempty query."""
+
+    def __init__(self):
+        self.base_url = OrganizerEmbedder().base_url
+        self._key = _env("RERANKER_API_KEY", "LLM_API_KEY", "OPENAI_API_KEY")
+        self.model = _env("RERANKER_MODEL", default="qwen/qwen3-reranker-8b")
+
+    def rerank(self, query: str, candidates: list[KnowledgeChunk], top_k: int):
+        _validate_query(query, top_k)
+        if not candidates or not tokenize(query):
+            return []
+        import httpx
+        count = min(top_k, len(candidates))
+        try:
+            with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+                response = client.post(self.base_url + "/rerank",
+                    headers={"Authorization": "Bearer " + self._key},
+                    json={"model": self.model, "query": query,
+                          "documents": [c.title + "\n" + c.text for c in candidates], "top_n": count})
+            if response.status_code != 200:
+                raise RerankerError(f"Reranker HTTP {response.status_code}")
+            payload = response.json()
+            entries = payload.get("results", payload.get("data"))
+            if not isinstance(entries, list) or len(entries) < count:
+                raise ValueError("Missing reranked results")
+            indices = [entry["index"] for entry in entries]
+            indices = [int(i.strip()) if isinstance(i, str) and i.strip().isdecimal() else i for i in indices]
+            if (any(isinstance(i, bool) or not isinstance(i, int) or not 0 <= i < len(candidates)
+                    for i in indices) or len(set(indices)) != len(indices)):
+                raise ValueError("Invalid reranked indices")
+            # Expose the new ordering, not stale RRF scores or a probability.
+            return [replace(candidates[i], score=1.0 / rank)
+                    for rank, i in enumerate(indices[:count], 1)]
+        except httpx.TransportError:
+            raise RerankerError("Reranker transport failure") from None
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise RerankerError("Malformed reranker response") from None
+
+
 class HybridRetriever:
     """Equal-weight reciprocal rank fusion; never add BM25 and cosine scores."""
 
-    def __init__(self, lexical: Retriever, semantic: Retriever):
+    def __init__(self, lexical: Retriever, semantic: Retriever, *, reranker=None):
         self._lexical = lexical
         self._semantic = semantic
+        self._reranker = reranker
 
     def retrieve(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
         _validate_query(query, top_k)
@@ -425,6 +485,13 @@ class HybridRetriever:
                     chunks[chunk.chunk_id] = chunk
                     scores[chunk.chunk_id] += 1.0 / (60 + rank)
         ranked = sorted(chunks, key=lambda key: (-scores[key], key))
+        if self._reranker is not None:
+            # RRF must not discard a unique hit before the reranker can judge it.
+            candidates = [replace(chunks[key], score=scores[key]) for key in ranked]
+            try:
+                return self._reranker.rerank(query, candidates, top_k)
+            except RerankerError as exc:
+                _LOG.warning("%s; using hybrid ranking without reranker", exc)
         return [replace(chunks[key], score=scores[key]) for key in ranked[:top_k]]
 
     def retrieve_with_evidence(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
@@ -526,4 +593,6 @@ def build_retriever(kb_path: Path, cache_dir: Path | None = None) -> Retriever:
     if mode == "bm25":
         return BM25Retriever(chunks, documents=documents)
     semantic = _embedding_retriever(chunks, cache_dir)
-    return semantic if mode == "embeddings" else HybridRetriever(BM25Retriever(chunks), semantic)
+    return semantic if mode == "embeddings" else HybridRetriever(
+        BM25Retriever(chunks), semantic,
+        reranker=OrganizerReranker() if _env("RERANK_ENABLED", default="0") == "1" else None)
