@@ -11,7 +11,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from contracts import ClientBrief, ConsultationResult
+from energytool.contracts import ClientBrief, ConsultationResult
 
 
 def now() -> str:

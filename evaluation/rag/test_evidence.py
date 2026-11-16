@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from backend.app.main import create_app
-from consultant import Consultant
-from contracts import ClientBrief, KnowledgeChunk
-from retrieval import BM25Retriever
+from energytool.consultant import Consultant
+from energytool.contracts import ClientBrief, KnowledgeChunk
+from energytool.retrieval import BM25Retriever
 
 
 def corpus():

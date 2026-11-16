@@ -2,10 +2,10 @@
 import json
 import unittest
 from unittest.mock import patch
-from chunking import chunk_documents
-from contracts import KnowledgeDocument, ClientBrief
-from retrieval import BM25Retriever
-from consultant import Consultant
+from energytool.chunking import chunk_documents
+from energytool.contracts import KnowledgeDocument, ClientBrief
+from energytool.retrieval import BM25Retriever
+from energytool.consultant import Consultant
 
 class DocumentContextTests(unittest.TestCase):
     def corpus(self, tail='Оговорка: результат не гарантируется.'):

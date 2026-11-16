@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import math
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -16,13 +15,14 @@ from zipfile import ZipFile, ZipInfo
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-import chunking
-import kb_loader
-from chunking import chunk_documents
-from contracts import KnowledgeDocument
-from kb_loader import KnowledgeBaseError, load_documents
-from retrieval import BM25Retriever, build_retriever, tokenize
+from energytool import chunking
+from energytool import kb_loader
+from energytool.chunking import chunk_documents
+from energytool.contracts import KnowledgeDocument
+from energytool.kb_loader import KnowledgeBaseError, load_documents
+from energytool.retrieval import BM25Retriever, build_retriever, tokenize
 from evaluation.rag.benchmark import evaluate, matches
+from scripts.build_submission import submission_file
 
 
 def document(text, source="invented.md"):
@@ -212,10 +212,10 @@ class RAGTests(unittest.TestCase):
     def test_cache_reuse_invalidation_and_corruption(self):
         cache = self.root / "cache"
         expected = build_retriever(self.kb, cache).retrieve("кровля")
-        with patch("retrieval.chunk_documents", side_effect=AssertionError("cache not reused")):
+        with patch("energytool.retrieval.chunk_documents", side_effect=AssertionError("cache not reused")):
             self.assertEqual(build_retriever(self.kb, cache).retrieve("кровля"), expected)
         next(cache.glob("*.json")).write_text("{broken", encoding="utf-8")
-        with self.assertLogs("retrieval", level="WARNING"):
+        with self.assertLogs("energytool.retrieval", level="WARNING"):
             self.assertEqual(build_retriever(self.kb, cache).retrieve("кровля"), expected)
         (self.kb / "roof.md").write_text("# Новый\n\nУникальная мозаика.", encoding="utf-8")
         self.assertEqual(build_retriever(self.kb, cache).retrieve("кровля"), [])
@@ -224,7 +224,7 @@ class RAGTests(unittest.TestCase):
     def test_unwritable_cache_falls_back_to_memory(self):
         blocked = self.root / "file"
         blocked.write_text("not a directory", encoding="utf-8")
-        with self.assertLogs("retrieval", level="WARNING"):
+        with self.assertLogs("energytool.retrieval", level="WARNING"):
             self.assertTrue(build_retriever(self.kb, blocked / "cache").retrieve("кровля"))
 
     def test_parallel_queries_do_not_mutate_results(self):
@@ -240,7 +240,7 @@ class RAGTests(unittest.TestCase):
         flat = self.root / "flat"
         flat.mkdir()
         for name in ("retrieval.py", "chunking.py", "kb_loader.py", "contracts.py"):
-            shutil.copyfile(ROOT / name, flat / name)
+            (flat / name).write_bytes(submission_file(name))
         code = """
 import socket
 socket.socket = lambda *a, **kw: (_ for _ in ()).throw(AssertionError('network'))

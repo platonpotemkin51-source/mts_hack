@@ -13,8 +13,8 @@ from unittest.mock import patch
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from contracts import KnowledgeChunk
-from retrieval import (
+from energytool.contracts import KnowledgeChunk
+from energytool.retrieval import (
     BM25Retriever, EmbeddingError, EmbeddingRetriever, HybridRetriever,
     OrganizerEmbedder, _normalize_vectors, build_retriever,
 )
@@ -28,7 +28,7 @@ class EmbeddingTests(unittest.TestCase):
                                "LLM_API_KEY": "invented-key",
                                "EMB_MODEL": "test-embedder",
                                "RETRIEVAL_MODE": "embeddings"}, clear=True).start()
-        patch("retrieval.time.sleep").start()
+        patch("energytool.retrieval.time.sleep").start()
         self.requests = []
         self.respond = self.good_response
         original_client = httpx.Client
@@ -196,7 +196,7 @@ class EmbeddingTests(unittest.TestCase):
         cache = self.root / "cache"
         build_retriever(self.kb, cache)
         next(cache.glob("embeddings-*.json")).write_text("{broken", encoding="utf-8")
-        with self.assertLogs("retrieval", level="WARNING"):
+        with self.assertLogs("energytool.retrieval", level="WARNING"):
             build_retriever(self.kb, cache)
         self.assertEqual(len(self.requests), 2)
 

@@ -20,9 +20,9 @@ import time
 import unicodedata
 from urllib.parse import urlsplit
 
-from contracts import KnowledgeChunk, KnowledgeDocument, Retriever
-from chunking import CHUNKER_VERSION, MAX_SECTION_CHARS, OVERLAP_CHARS, chunk_documents
-from kb_loader import load_documents
+from energytool.contracts import KnowledgeChunk, KnowledgeDocument, Retriever
+from energytool.chunking import CHUNKER_VERSION, MAX_SECTION_CHARS, OVERLAP_CHARS, chunk_documents
+from energytool.kb_loader import load_documents
 
 INDEX_VERSION = "bm25-ru-v2"
 _LOG = logging.getLogger(__name__)

@@ -6,7 +6,7 @@ RUN python -m pip install --no-cache-dir -r requirements.lock \
     && groupadd --gid 10001 app \
     && useradd --uid 10001 --gid app --no-create-home app \
     && mkdir -p /app/runtime && chown app:app /app/runtime
-COPY contracts.py consultant.py llm_client.py retrieval.py kb_loader.py chunking.py ./
+COPY energytool ./energytool
 COPY backend ./backend
 USER app
 EXPOSE 8000

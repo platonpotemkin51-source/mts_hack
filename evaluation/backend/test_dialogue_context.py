@@ -2,8 +2,8 @@
 import json
 import unittest
 
-from consultant import Consultant, _active_users, _explicit_lead_request, _model_history, _safe_unsourced_answer, _search_query
-from contracts import ChatMessage, ClientBrief
+from energytool.consultant import Consultant, _active_users, _explicit_lead_request, _model_history, _safe_unsourced_answer, _search_query
+from energytool.contracts import ChatMessage, ClientBrief
 
 
 class EmptyRetriever:

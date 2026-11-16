@@ -9,8 +9,8 @@ import time
 from collections.abc import Callable
 from decimal import Decimal
 
-from contracts import ChatMessage, ClientBrief, ConsultationResult, Retriever, Timings
-from llm_client import ModelUnavailable, generate
+from energytool.contracts import ChatMessage, ClientBrief, ConsultationResult, Retriever, Timings
+from energytool.llm_client import ModelUnavailable, generate
 
 
 class InvalidModelAnswer(ModelUnavailable):

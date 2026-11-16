@@ -3,7 +3,7 @@ import time
 import unittest
 from unittest.mock import patch
 import httpx
-from llm_client import generate, ModelUnavailable
+from energytool.llm_client import generate, ModelUnavailable
 
 
 class RateLimitTests(unittest.TestCase):

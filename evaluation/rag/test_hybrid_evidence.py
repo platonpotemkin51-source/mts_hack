@@ -2,9 +2,9 @@
 import json
 import unittest
 from unittest.mock import patch
-from consultant import Consultant
-from contracts import ClientBrief, KnowledgeChunk
-from retrieval import BM25Retriever, HybridRetriever
+from energytool.consultant import Consultant
+from energytool.contracts import ClientBrief, KnowledgeChunk
+from energytool.retrieval import BM25Retriever, HybridRetriever
 
 class Semantic:
     def __init__(self, result): self.result,self.calls=result,0

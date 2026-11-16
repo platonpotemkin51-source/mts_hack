@@ -7,7 +7,7 @@
 снимок сохранённой заявки (`LeadResponse` или `null`), доступный в архиве и для скачивания.
 Создание заявки во время формирования ответа возвращает `409 request_pending`.
 
-Этот документ — договор команды. HTTP-схемы и статусы зафиксированы в `contracts/openapi.json`; Python-типы — в `contracts.py`. API реализован в `backend/app/main.py`.
+Этот документ — договор команды. HTTP-схемы и статусы зафиксированы в `contracts/openapi.json`; Python-типы — в `energytool/contracts.py`. API реализован в `backend/app/main.py`.
 
 ## Граница поиска и консультации
 
@@ -16,7 +16,7 @@ retriever = build_retriever(kb_path, cache_dir=cache_dir)
 chunks = retriever.retrieve(query, top_k=6)
 ```
 
-`build_retriever` экспортируется из `retrieval.py`. `kb_path` — путь к ZIP базы или распакованному каталогу. Возвращаемый объект реализует протокол `Retriever` из `contracts.py`.
+`build_retriever` экспортируется из `energytool/retrieval.py`. `kb_path` — путь к ZIP базы или распакованному каталогу. Возвращаемый объект реализует протокол `Retriever` из `energytool/contracts.py`.
 
 Метод `retrieve` синхронный. Возвращает `list[KnowledgeChunk]`, отсортированный по убыванию релевантности; при отсутствии подходящих фрагментов — пустой список. Список содержит не более `top_k` элементов, без повторов `chunk_id`. Не использовать числовой score как калиброванную вероятность правильного ответа.
 

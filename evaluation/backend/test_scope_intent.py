@@ -1,6 +1,6 @@
 """Mentioning missing documentation is not requesting technical instructions."""
 import unittest
-from consultant import _out_of_scope
+from energytool.consultant import _out_of_scope
 
 
 class ScopeIntentTests(unittest.TestCase):

@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 from backend.app.storage import Store, StoreError
-from consultant import Consultant
-from contracts import ChatMessage, ClientBrief, ConsultationResult
+from energytool.consultant import Consultant
+from energytool.contracts import ChatMessage, ClientBrief, ConsultationResult
 
 
 class HandoffTests(unittest.TestCase):

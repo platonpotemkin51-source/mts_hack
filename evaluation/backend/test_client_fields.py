@@ -2,8 +2,8 @@
 import json
 import unittest
 from unittest.mock import patch
-from consultant import Consultant, _client_fields
-from contracts import ChatMessage, ClientBrief, KnowledgeChunk
+from energytool.consultant import Consultant, _client_fields
+from energytool.contracts import ChatMessage, ClientBrief, KnowledgeChunk
 
 
 class ClientFieldTests(unittest.TestCase):

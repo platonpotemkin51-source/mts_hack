@@ -9,7 +9,7 @@ import re
 import stat
 from zipfile import BadZipFile, ZipFile
 
-from contracts import KnowledgeDocument
+from energytool.contracts import KnowledgeDocument
 
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024

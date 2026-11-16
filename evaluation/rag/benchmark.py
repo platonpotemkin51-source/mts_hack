@@ -15,9 +15,9 @@ import tracemalloc
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from chunking import chunk_documents
-from kb_loader import load_documents
-from retrieval import BM25Retriever, build_retriever
+from energytool.chunking import chunk_documents
+from energytool.kb_loader import load_documents
+from energytool.retrieval import BM25Retriever, build_retriever
 
 
 def matches(chunk, target):

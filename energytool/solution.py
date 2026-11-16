@@ -15,9 +15,9 @@ from typing import Callable
 
 os.environ.setdefault("RETRIEVAL_MODE", "hybrid")
 
-from consultant import Consultant, answer_test_case
-from llm_client import generate
-from retrieval import build_retriever
+from energytool.consultant import Consultant, answer_test_case
+from energytool.llm_client import generate
+from energytool.retrieval import build_retriever
 
 
 FALLBACK = "Сейчас не удалось получить достоверный ответ по базе знаний. Пожалуйста, обратитесь к специалисту Energytool."

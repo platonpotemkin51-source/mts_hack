@@ -1,8 +1,8 @@
 """Competition answers retain grounding and handoff without a web card."""
 import json
 import unittest
-from consultant import Consultant, _parse_model_answer
-from contracts import ChatMessage, ClientBrief, KnowledgeChunk
+from energytool.consultant import Consultant, _parse_model_answer
+from energytool.contracts import ChatMessage, ClientBrief, KnowledgeChunk
 
 
 class Retriever:

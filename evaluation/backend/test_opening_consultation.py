@@ -1,9 +1,9 @@
 """Natural dialogue survives without product citations; factual claims stay guarded."""
 import json
 import unittest
-from consultant import Consultant, InvalidModelAnswer, _parse_model_answer
-from contracts import ChatMessage, ClientBrief, KnowledgeChunk
-from llm_client import ModelUnavailable
+from energytool.consultant import Consultant, InvalidModelAnswer, _parse_model_answer
+from energytool.contracts import ChatMessage, ClientBrief, KnowledgeChunk
+from energytool.llm_client import ModelUnavailable
 
 
 class Retriever:

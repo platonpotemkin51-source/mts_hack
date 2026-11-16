@@ -14,9 +14,9 @@ import httpx
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
-from consultant import Consultant, answer_test_case
-from contracts import ChatMessage, ClientBrief, KnowledgeChunk
-from llm_client import ModelUnavailable, generate
+from energytool.consultant import Consultant, answer_test_case
+from energytool.contracts import ChatMessage, ClientBrief, KnowledgeChunk
+from energytool.llm_client import ModelUnavailable, generate
 
 
 CHUNK = KnowledgeChunk("invented-1", "fiction.md", "Макет", "Вымышленный макет хранится в шкафу.", 1.0)

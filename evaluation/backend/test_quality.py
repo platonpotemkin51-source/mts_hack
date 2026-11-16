@@ -12,10 +12,10 @@ import httpx
 from fastapi.testclient import TestClient
 
 from backend.app.main import create_app
-from consultant import Consultant, _search_query
-from contracts import ChatMessage, ClientBrief, KnowledgeChunk
-from llm_client import ModelUnavailable, generate
-from retrieval import BM25Retriever
+from energytool.consultant import Consultant, _search_query
+from energytool.contracts import ChatMessage, ClientBrief, KnowledgeChunk
+from energytool.llm_client import ModelUnavailable, generate
+from energytool.retrieval import BM25Retriever
 
 
 CHUNK = KnowledgeChunk("real-chunk", "invented.md", "Вымышленный продукт",

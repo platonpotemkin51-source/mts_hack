@@ -16,10 +16,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
-from contracts import ChatMessage
-from consultant import Consultant, InvalidModelAnswer
-from llm_client import ModelUnavailable, configured
-from retrieval import build_retriever
+from energytool.contracts import ChatMessage
+from energytool.consultant import Consultant, InvalidModelAnswer
+from energytool.llm_client import ModelUnavailable, configured
+from energytool.retrieval import build_retriever
 from backend.app.storage import Store, StoreError
 
 

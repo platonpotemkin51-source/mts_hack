@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from evaluation.rag.benchmark import evaluate
-from retrieval import EmbeddingError, build_retriever
+from energytool.retrieval import EmbeddingError, build_retriever
 
 
 def compare(kb, cases, modes, cache_dir):

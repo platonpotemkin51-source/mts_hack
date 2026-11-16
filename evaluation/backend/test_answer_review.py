@@ -3,9 +3,9 @@ import json
 import unittest
 from unittest.mock import patch
 
-from consultant import Consultant, _review_reason
-from contracts import ClientBrief, KnowledgeChunk
-from llm_client import ModelUnavailable
+from energytool.consultant import Consultant, _review_reason
+from energytool.contracts import ClientBrief, KnowledgeChunk
+from energytool.llm_client import ModelUnavailable
 
 
 CHUNK = KnowledgeChunk("doc", "invented.md", "Макет", "Макет читает бумагу. Стоимость тестового макета 250 руб.")

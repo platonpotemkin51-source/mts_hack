@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contracts import KnowledgeChunk, KnowledgeDocument
+from energytool.contracts import KnowledgeChunk, KnowledgeDocument
 import hashlib
 import re
 
