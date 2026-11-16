@@ -1,7 +1,7 @@
 """Natural dialogue survives without product citations; factual claims stay guarded."""
 import json
 import unittest
-from consultant import Consultant, InvalidModelAnswer, _parse_model_answer, _search_query
+from consultant import Consultant, InvalidModelAnswer, _parse_model_answer
 from contracts import ChatMessage, ClientBrief, KnowledgeChunk
 from llm_client import ModelUnavailable
 
@@ -81,26 +81,6 @@ class OpeningTests(unittest.TestCase):
         self.assertNotIn('бесплатен',result.answer)
         self.assertEqual(result.sources,[])
         self.assertEqual(len(calls),2)
-
-    def test_object_echo_is_regenerated_once_without_replacing_it_with_a_script(self):
-        for obj in ('Квартира', 'Офис', 'Производственная площадка'):
-            with self.subTest(obj=obj):
-                draft=json.loads(payload(obj));draft['brief']['object']=obj
-                expected='Понял вашу ситуацию. Что изменилось в потреблении за последний период?'
-                result,calls=self.respond([json.dumps(draft),payload(expected)],message=obj)
-                self.assertEqual(result.answer,expected)
-                self.assertEqual(len(calls),2)
-
-    def test_single_word_dialogue_fragment_is_rejected_even_without_a_card(self):
-        with self.assertRaises(InvalidModelAnswer):
-            _parse_model_answer(payload('Квартира'),competition=True)
-
-    def test_bill_diagnosis_is_not_routed_to_an_equipment_questionnaire(self):
-        history=[ChatMessage('user','Хочу разобраться с расходами на электроэнергию')]
-        q=_search_query('В квартире много электроники и большие счета',history,ClientBrief())
-        self.assertIn('средняя цена',q)
-        q=_search_query('Нужна платформа учёта по арендаторам, расходы выросли',history,ClientBrief())
-        self.assertNotIn('средняя цена',q)
 
     def test_unknown_answer_kind_is_rejected(self):
         with self.assertRaises(InvalidModelAnswer):

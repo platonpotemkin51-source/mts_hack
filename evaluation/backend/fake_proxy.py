@@ -54,6 +54,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
     print("SYNTHETIC MODEL PROXY: transport tests only", flush=True)
-    ThreadingHTTPServer(("0.0.0.0", args.port), Handler).serve_forever()
+    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()

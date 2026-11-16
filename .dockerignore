@@ -13,3 +13,9 @@ evaluation
 *.csv
 *.sqlite*
 *.db*
+.agents
+.codex
+.aws
+docs
+scripts
+skills-lock.json

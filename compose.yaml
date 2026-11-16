@@ -1,21 +1,46 @@
 services:
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    env_file:
-      - path: .env
-        required: false
+    build: .
+    env_file: .env
+    environment:
+      DATA_DIR: /app/data
+      CACHE_DIR: /app/runtime/index
+      SQLITE_PATH: /app/runtime/energytool.sqlite3
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     volumes:
       - ./data:/app/data:ro
-      - ./runtime:/app/runtime
+      - app-data:/app/runtime
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    build: ./frontend
     depends_on:
       - backend
     ports:
-      - "${UI_PORT:-5173}:80"
+      - "127.0.0.1:${UI_PORT:-5173}:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:8080/]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+volumes:
+  app-data:

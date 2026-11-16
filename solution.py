@@ -13,6 +13,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Callable
 
+os.environ.setdefault("RETRIEVAL_MODE", "hybrid")
+
 from consultant import Consultant, answer_test_case
 from llm_client import generate
 from retrieval import build_retriever

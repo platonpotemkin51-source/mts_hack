@@ -1,7 +1,6 @@
 """Package only the flat competition runner and its required dependency."""
 
 import ast
-import argparse
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -19,15 +18,6 @@ FILES = (
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--context-mode", choices=("chunks", "documents"), default="chunks")
-    parser.add_argument("--retrieval-mode", choices=("bm25", "hybrid"), default="bm25")
-    parser.add_argument("--rerank", action="store_true", help="Enable organizer reranker for hybrid mode")
-    args = parser.parse_args()
-    if args.rerank and args.retrieval_mode != "hybrid":
-        parser.error("--rerank requires --retrieval-mode hybrid")
-    if args.context_mode == "documents" and args.retrieval_mode == "hybrid":
-        parser.error("Compare hybrid and whole-document context separately")
     for name in FILES:
         if not (ROOT / name).is_file():
             raise SystemExit(f"Missing required source file: {name}")
@@ -41,15 +31,6 @@ def main() -> None:
         for name in FILES:
             if name == "requirements.txt":
                 archive.writestr(name, "httpx==0.28.1\n")
-            elif name == "solution.py" and (args.context_mode == "documents" or args.retrieval_mode == "hybrid"):
-                source = (ROOT / name).read_text(encoding="utf-8")
-                setting = ('os.environ.setdefault("CONTEXT_MODE", "documents")' if args.context_mode == "documents" else
-                           'os.environ.setdefault("RETRIEVAL_MODE", "hybrid")')
-                if args.rerank:
-                    setting += '\nos.environ.setdefault("RERANK_ENABLED", "1")'
-                source = source.replace("from consultant import", setting + '\n\nfrom consultant import', 1)
-                ast.parse(source)
-                archive.writestr(name, source)
             else:
                 archive.write(ROOT / name, arcname=name)
     if output.stat().st_size > 128 * 1024 * 1024:

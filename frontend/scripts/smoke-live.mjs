@@ -6,7 +6,7 @@ if (process.env.LIVE_STACK_SYNTHETIC !== "1") {
   throw new Error("Set LIVE_STACK_SYNTHETIC=1 to acknowledge the synthetic model");
 }
 const url = process.env.LIVE_URL || "http://localhost:15173";
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await page.goto(url);

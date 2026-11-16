@@ -82,12 +82,11 @@ def create_app(*, retriever=None, generate_fn=None, db_path: Path | None = None)
     origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if x.strip()]
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=False,
                        allow_methods=["GET", "POST"], allow_headers=["Content-Type"])
-    locks: dict[str, threading.Lock] = {}
-    locks_guard = threading.Lock()
+    # Bound memory across long-lived sessions; collisions only serialize requests.
+    locks = [threading.Lock() for _ in range(64)]
 
     def lock_for(key: str) -> threading.Lock:
-        with locks_guard:
-            return locks.setdefault(key, threading.Lock())
+        return locks[hash(key) % len(locks)]
 
     def store_for(request: Request) -> Store:
         store = request.app.state.store

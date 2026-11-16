@@ -1,0 +1,22 @@
+services:
+  backend:
+    image: energytool-check-backend:latest
+    env_file: !reset []
+    environment:
+      LLM_BASE_URL: http://proxy:8765
+      LLM_API_KEY: synthetic-no-secret
+      LLM_MODEL: synthetic
+      RETRIEVAL_MODE: bm25
+    volumes: !override
+      - ./runtime/verification:/app/data:ro
+      - app-data:/app/runtime
+    depends_on:
+      - proxy
+  proxy:
+    image: energytool-check-backend:latest
+    command: [python, /test-proxy.py, --host, 0.0.0.0]
+    volumes:
+      - ./evaluation/backend/fake_proxy.py:/test-proxy.py:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
