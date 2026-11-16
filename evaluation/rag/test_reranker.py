@@ -72,12 +72,47 @@ class RerankerTests(unittest.TestCase):
         self.assertEqual(len(self.requests),1);self.assertEqual(semantic.calls,1)
         self.assertEqual(result[0].text,body['documents'][2].split('\n',1)[1])
 
+    def test_reranker_sees_unique_best_hits_from_both_channels(self):
+        shared=self.chunks[:19]
+        lexical_best=KnowledgeChunk('a-unique','a.md','Лексический результат','Точное условие.')
+        semantic_best=KnowledgeChunk('z-unique','b.md','Смысловой результат','Ответ на перефразировку.')
+        self.response=httpx.Response(200,json={'results':[{'index':20}]})
+        semantic=Fixed([semantic_best]+shared)
+        hybrid=HybridRetriever(Fixed([lexical_best]+shared),semantic,reranker=OrganizerReranker())
+        found=hybrid.retrieve('вопрос',1)
+        body=json.loads(self.requests[0].content)
+        self.assertEqual(len(body['documents']),21)
+        self.assertTrue(any(semantic_best.text in text for text in body['documents']))
+        self.assertTrue(any(lexical_best.text in text for text in body['documents']))
+        self.assertEqual(found[0].chunk_id,semantic_best.chunk_id)
+        self.assertEqual(semantic.calls,1)
+
+    def test_disjoint_channels_pass_at_most_forty_unique_candidates(self):
+        lexical=self.chunks[:20]
+        semantic=[KnowledgeChunk('dense-'+str(i),'dense.md','Макет','Смысл '+str(i)) for i in range(20)]
+        self.response=httpx.Response(200,json={'results':[{'index':0}]})
+        HybridRetriever(Fixed(lexical),Fixed(semantic),reranker=OrganizerReranker()).retrieve('вопрос',1)
+        body=json.loads(self.requests[0].content)
+        self.assertEqual(len(body['documents']),40)
+        self.assertEqual(len(set(body['documents'])),40)
+        self.assertEqual(body['top_n'],1)
+
     def test_unavailable_reranker_keeps_the_complete_hybrid_order(self):
         expected=HybridRetriever(Fixed(self.chunks),Fixed(self.chunks)).retrieve('Вопрос',6)
         self.response=httpx.Response(500,text='PRIVATE')
         with self.assertLogs('retrieval',level='WARNING')as logs:
             result=HybridRetriever(Fixed(self.chunks),Fixed(self.chunks),reranker=OrganizerReranker()).retrieve('Вопрос',6)
         self.assertEqual(result,expected);self.assertNotIn('PRIVATE',' '.join(logs.output))
+
+    def test_wider_pool_does_not_change_fallback_when_channels_disagree(self):
+        lexical=self.chunks[:20]
+        semantic=[KnowledgeChunk('dense-'+str(i),'dense.md','Макет','Смысл '+str(i)) for i in range(20)]
+        expected=HybridRetriever(Fixed(lexical),Fixed(semantic)).retrieve('вопрос',6)
+        self.response=httpx.Response(503)
+        with self.assertLogs('retrieval',level='WARNING'):
+            found=HybridRetriever(Fixed(lexical),Fixed(semantic),reranker=OrganizerReranker()).retrieve('вопрос',6)
+        self.assertEqual(found,expected)
+        self.assertEqual(len(self.requests),1)
 
     def test_reranked_answer_keeps_its_companion_limitation(self):
         chunks=[KnowledgeChunk('intro','20-products/paper.md','Макет / Что это','Макет сканирует бумагу.'),

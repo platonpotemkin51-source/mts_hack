@@ -34,6 +34,7 @@ _ALIASES = {
     "электричеств": "электроэнерг", "крыш": "кровл",
     "фото": "фотограф", "снимок": "фотограф", "снимк": "фотограф",
     "симк": "сим", "sim": "сим", "орэм": "оптов", "askue": "аскуэ",
+    "вода": "вод", "воды": "вод", "воду": "вод", "воде": "вод", "водо": "вод",
 }
 
 
@@ -269,10 +270,6 @@ class BM25Retriever:
                         present.add(chunk.chunk_id)
                         remaining -= len(chunk.text)
                         break
-                if len(added) == 3:
-                    break
-            if len(added) == 3:
-                break
         result = ranked + added
         present = {c.chunk_id for c in result}
         # Keep lexical evidence intact; the second channel only fills gaps.
@@ -489,7 +486,8 @@ class HybridRetriever:
                     scores[chunk.chunk_id] += 1.0 / (60 + rank)
         ranked = sorted(chunks, key=lambda key: (-scores[key], key))
         if self._reranker is not None:
-            candidates = [replace(chunks[key], score=scores[key]) for key in ranked[:max(20, top_k)]]
+            # RRF must not discard a unique hit before the reranker can judge it.
+            candidates = [replace(chunks[key], score=scores[key]) for key in ranked]
             try:
                 return self._reranker.rerank(query, candidates, top_k)
             except RerankerError as exc:
