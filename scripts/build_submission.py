@@ -7,9 +7,10 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {name: f"energytool/{name}" for name in (
-    "solution.py", "contracts.py", "consultant.py", "llm_client.py",
+    "contracts.py", "consultant.py", "llm_client.py",
     "kb_loader.py", "chunking.py", "retrieval.py",
 )}
+FILES["solution.py"] = "solution.py"
 FILES["requirements.txt"] = "requirements.txt"
 
 

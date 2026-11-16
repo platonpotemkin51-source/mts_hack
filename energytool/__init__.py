@@ -1,1 +1,1 @@
-"""Shared consultation, retrieval and competition runner."""
+"""Shared consultation and retrieval core."""

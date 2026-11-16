@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from energytool.solution import FALLBACK, main, run
+from solution import FALLBACK, main, run
 
 
 class FakeConsultant:
@@ -61,7 +61,7 @@ class SolutionTests(unittest.TestCase):
 
     def test_completed_csv_with_fallback_is_successful_submission(self):
         # A fallback row must not turn a completed CSV into a failed run.
-        with patch("energytool.solution.run", return_value=(3, 1)):
+        with patch("solution.run", return_value=(3, 1)):
             main()
 
     def test_runtime_budget_reserves_time_to_write_csv(self):

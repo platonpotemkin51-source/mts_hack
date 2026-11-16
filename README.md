@@ -76,10 +76,11 @@ Compose фиксирует внутренние пути `/app/data` и `/app/ru
 | `energytool/retrieval.py` | BM25 / embeddings / гибрид RRF, добор ограничений продуктов |
 | `energytool/llm_client.py` | Тайм-ауты, ограниченные повторы и безопасные ошибки API модели |
 | `energytool/contracts.py`, `contracts/openapi.json` | Доменные типы и опубликованный HTTP-контракт |
-| `energytool/solution.py` | Конкурсный CSV через то же ядро, отдельный контекст каждого ID |
+| `solution.py` | Конкурсный CSV через то же ядро, отдельный контекст каждого ID |
 
 Ядро находится в пакете `energytool/`, HTTP-адаптер — в `backend/`, UI —
-в `frontend/`, проверки — в `evaluation/`. Сборщик отдельно преобразует импорты
+в `frontend/`, проверки — в `evaluation/`. В корне оставлена точка входа
+`solution.py` для CSV. Сборщик отдельно преобразует импорты
 и формирует плоский ZIP по требованиям платформы. Backend и frontend
 отделены от ядра и не импортируются им. Индекс переиспользуется, состояние клиента
 хранится отдельно в SQLite. Один backend-процесс — согласованная запись диалога.
@@ -136,7 +137,7 @@ Python закреплён полностью в requirements.lock; Node — в p
 Не коммитьте `.env`, базу, диалоги, индексы и исходные CSV организаторов.
 
 Для автоматической платформы: положите `questions.csv` и `knowledge-base.zip` в
-`data/`, настройте API и запустите `python3 -m energytool.solution`. Он создаст `submission.csv`.
+`data/`, настройте API и запустите `python3 solution.py`. Он создаст `submission.csv`.
 `python3 scripts/build_submission.py` собирает отдельный плоский ZIP с гибридом;
 загрузка на платформу выполняется вручную ответственным участником.
 
