@@ -20,7 +20,7 @@ import time
 import unicodedata
 from urllib.parse import urlsplit
 
-from contracts import KnowledgeChunk, Retriever
+from contracts import KnowledgeChunk, KnowledgeDocument, Retriever
 from chunking import CHUNKER_VERSION, MAX_SECTION_CHARS, OVERLAP_CHARS, chunk_documents
 from kb_loader import load_documents
 
@@ -78,10 +78,12 @@ class BM25Retriever:
     probability. A lexical match does not establish that the KB answers a query.
     """
 
-    def __init__(self, chunks: list[KnowledgeChunk], *, expand: bool = True):
+    def __init__(self, chunks: list[KnowledgeChunk], *, expand: bool = True,
+                 documents: list[KnowledgeDocument] | None = None):
         if not chunks:
             raise ValueError("Cannot index an empty knowledge base")
         self._chunks = tuple(chunks)
+        self._documents = {d.source: d for d in documents or []}
         self._overviews = {
             chunk.source: chunk for chunk in chunks
             if chunk.source.startswith("20-products/")
@@ -164,6 +166,36 @@ class BM25Retriever:
                 result.append(replace(chunk, score=scores[index]))
                 if len(result) == top_k:
                     break
+        return result
+
+    def retrieve_with_documents(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
+        """Replace selected product fragments with intact documents; keep other evidence."""
+        ranked = self.retrieve_with_evidence(query, top_k)
+        if not ranked:
+            return []
+        counts = Counter(c.source for c in ranked[:top_k] if c.source in self._overviews)
+        selected = [source for source, count in counts.most_common()
+                    if count >= 2 or source == ranked[0].source][:2]
+        replacements = {}
+        size = sum(len(c.text) for c in ranked)
+        for source in selected:
+            document = self._documents.get(source)
+            if document is None:
+                continue
+            new_size = size - sum(len(c.text) for c in ranked if c.source == source) + len(document.text)
+            if new_size > 40000:
+                continue
+            identifier = hashlib.sha256((source + "\0" + document.text).encode()).hexdigest()
+            replacements[source] = KnowledgeChunk(identifier, source, document.title, document.text)
+            size = new_size
+        result = []
+        emitted = set()
+        for chunk in ranked:
+            if chunk.source not in replacements:
+                result.append(chunk)
+            elif chunk.source not in emitted:
+                result.append(replacements[chunk.source])
+                emitted.add(chunk.source)
         return result
 
     def retrieve_with_overviews(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
@@ -488,6 +520,6 @@ def build_retriever(kb_path: Path, cache_dir: Path | None = None) -> Retriever:
             _write_cache(path, {"key": key, "version": INDEX_VERSION,
                                 "chunks": [asdict(c) for c in chunks]})
     if mode == "bm25":
-        return BM25Retriever(chunks)
+        return BM25Retriever(chunks, documents=documents)
     semantic = _embedding_retriever(chunks, cache_dir)
     return semantic if mode == "embeddings" else HybridRetriever(BM25Retriever(chunks), semantic)

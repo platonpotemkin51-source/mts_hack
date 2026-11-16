@@ -511,6 +511,13 @@ class Consultant:
         expansion = getattr(self.retriever, "retrieve_with_overviews", None)
         if os.getenv("EVIDENCE_COMPLETION", "1") != "0":
             expansion = getattr(self.retriever, "retrieve_with_evidence", expansion)
+        context_mode = os.getenv("CONTEXT_MODE", "chunks")
+        if context_mode not in ("chunks", "documents"):
+            raise ValueError("CONTEXT_MODE must be chunks or documents")
+        if context_mode == "documents":
+            expansion = getattr(self.retriever, "retrieve_with_documents", None)
+            if not callable(expansion):
+                raise ValueError("Document context requires a retriever with full documents")
         chunks = (expansion(query, top_k=top_k) if self.context_expansion and callable(expansion)
                   else self.retriever.retrieve(query, top_k=top_k))
         if len(chunks) > top_k:

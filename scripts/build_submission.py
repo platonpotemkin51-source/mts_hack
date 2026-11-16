@@ -1,6 +1,7 @@
 """Package only the flat competition runner and its required dependency."""
 
 import ast
+import argparse
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -18,6 +19,9 @@ FILES = (
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--context-mode", choices=("chunks", "documents"), default="chunks")
+    args = parser.parse_args()
     for name in FILES:
         if not (ROOT / name).is_file():
             raise SystemExit(f"Missing required source file: {name}")
@@ -31,6 +35,11 @@ def main() -> None:
         for name in FILES:
             if name == "requirements.txt":
                 archive.writestr(name, "httpx==0.28.1\n")
+            elif name == "solution.py" and args.context_mode == "documents":
+                source = (ROOT / name).read_text(encoding="utf-8")
+                source = source.replace("from consultant import", 'os.environ.setdefault("CONTEXT_MODE", "documents")\n\nfrom consultant import', 1)
+                ast.parse(source)
+                archive.writestr(name, source)
             else:
                 archive.write(ROOT / name, arcname=name)
     if output.stat().st_size > 128 * 1024 * 1024:
