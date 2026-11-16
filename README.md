@@ -52,6 +52,9 @@ py -3.11 -m venv .venv
 используется прежний режим `chunks`. Для отдельного конкурсного ZIP выполните
 `python3 scripts/build_submission.py --context-mode documents`.
 Сравнение и ограничения: [полные документы](evaluation/quality/DOCUMENT_CONTEXT.md).
+Отдельный гибридный кандидат: `python3 scripts/build_submission.py --retrieval-mode hybrid`.
+Он использует embeddings API платформы и сохраняет добор ограничений;
+[проверки и ограничения](evaluation/quality/HYBRID_CANDIDATE.md).
 При передаче специалисту резюме сохраняет дословные сведения о задаче клиента,
 в том числе когда модель не вернула цитаты. Веб использует полную схему карточки.
 `CLIENT_FACTS=1` передаёт модели уже названные клиентом поля и включён по умолчанию.

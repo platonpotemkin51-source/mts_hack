@@ -21,7 +21,10 @@ FILES = (
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--context-mode", choices=("chunks", "documents"), default="chunks")
+    parser.add_argument("--retrieval-mode", choices=("bm25", "hybrid"), default="bm25")
     args = parser.parse_args()
+    if args.context_mode == "documents" and args.retrieval_mode == "hybrid":
+        parser.error("Compare hybrid and whole-document context separately")
     for name in FILES:
         if not (ROOT / name).is_file():
             raise SystemExit(f"Missing required source file: {name}")
@@ -35,9 +38,11 @@ def main() -> None:
         for name in FILES:
             if name == "requirements.txt":
                 archive.writestr(name, "httpx==0.28.1\n")
-            elif name == "solution.py" and args.context_mode == "documents":
+            elif name == "solution.py" and (args.context_mode == "documents" or args.retrieval_mode == "hybrid"):
                 source = (ROOT / name).read_text(encoding="utf-8")
-                source = source.replace("from consultant import", 'os.environ.setdefault("CONTEXT_MODE", "documents")\n\nfrom consultant import', 1)
+                setting = ('os.environ.setdefault("CONTEXT_MODE", "documents")' if args.context_mode == "documents" else
+                           'os.environ.setdefault("RETRIEVAL_MODE", "hybrid")')
+                source = source.replace("from consultant import", setting + '\n\nfrom consultant import', 1)
                 ast.parse(source)
                 archive.writestr(name, source)
             else:

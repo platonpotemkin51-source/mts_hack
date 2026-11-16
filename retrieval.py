@@ -198,13 +198,13 @@ class BM25Retriever:
                 emitted.add(chunk.source)
         return result
 
-    def retrieve_with_overviews(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
+    def retrieve_with_overviews(self, query: str, top_k: int = 6, *, ranked=None) -> list[KnowledgeChunk]:
         """Add overview sections when two products compete in one question.
 
         Keep all ranked results, including limitations; add at most two short
         companion sections. This is not a global top-k increase.
         """
-        ranked = self.retrieve(query, top_k=top_k)
+        ranked = self.retrieve(query, top_k=top_k) if ranked is None else ranked
         counts = Counter(chunk.source for chunk in ranked)
         eligible = [source for source, count in counts.items()
                     if count >= 2 and source in self._overviews]
@@ -215,13 +215,13 @@ class BM25Retriever:
                   if self._overviews[source].chunk_id not in present]
         return ranked + extras
 
-    def retrieve_with_evidence(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
+    def retrieve_with_evidence(self, query: str, top_k: int = 6, *, ranked=None) -> list[KnowledgeChunk]:
         """Fill missing applicability/limits for up to two supported products.
 
         shortcut: heading-based coverage, not proof of semantic sufficiency;
         upgrade only after measuring missed conditions on held-out questions.
         """
-        ranked = self.retrieve_with_overviews(query, top_k)
+        ranked = self.retrieve_with_overviews(query, top_k, ranked=ranked)
         if not ranked:
             return ranked
         counts = Counter(self._evidence_products.get(c.chunk_id, c.source) for c in ranked[:top_k])
@@ -426,6 +426,10 @@ class HybridRetriever:
                     scores[chunk.chunk_id] += 1.0 / (60 + rank)
         ranked = sorted(chunks, key=lambda key: (-scores[key], key))
         return [replace(chunks[key], score=scores[key]) for key in ranked[:top_k]]
+
+    def retrieve_with_evidence(self, query: str, top_k: int = 6) -> list[KnowledgeChunk]:
+        ranked = self.retrieve(query, top_k)
+        return self._lexical.retrieve_with_evidence(query, top_k, ranked=ranked)
 
 
 def _cache_key(documents) -> str:
